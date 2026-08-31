@@ -45,8 +45,9 @@ class OrganizerAnalyticsService {
     // 2. Resale policy configured
     const resalePolicyConfigured = event.resale_allowed !== null && event.resale_price_cap >= 1.0;
 
-    // 3. Payout account connected
-    const payoutAccountConnected = true; // Organizer has verified escrow settlement account on file
+    // 3. Payout account connected & verified
+    const orgProfile = db.prepare(`SELECT * FROM organizer_profiles WHERE user_id = ?`).get(event.organizer_id) as any;
+    const payoutAccountConnected = Boolean(orgProfile && orgProfile.verification_status === 'verified' && orgProfile.payout_account_id);
 
     // 4. Scanner devices tested (MUST have at least 1 actual scan recorded in offline_scans_log)
     const scanCountRow = db.prepare(`

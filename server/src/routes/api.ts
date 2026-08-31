@@ -10,16 +10,45 @@ import { resaleService } from '../services/resaleService.js';
 import { socialService, GoingVisibility } from '../services/socialService.js';
 import { notificationsService } from '../services/notificationsService.js';
 import { organizerAnalyticsService } from '../services/organizerAnalyticsService.js';
+import { onboardingService } from '../services/onboardingService.js';
+import { authService } from '../services/authService.js';
 
 export const apiRouter = Router();
 
 // ==========================================
+// 0. Authentication
+// ==========================================
+apiRouter.post('/auth/signup', (req: Request, res: Response) => {
+  try {
+    const { email, password, name, role, organizationName, phone } = req.body;
+    const result = authService.signup({ email, password, name, role, organizationName, phone });
+    res.json(result);
+  } catch (err: any) {
+    res.status(err.statusCode || 400).json({ success: false, error: err.message });
+  }
+});
+
+apiRouter.post('/auth/login', (req: Request, res: Response) => {
+  try {
+    const { email, password } = req.body;
+    const result = authService.login(email, password);
+    res.json(result);
+  } catch (err: any) {
+    res.status(err.statusCode || 401).json({ success: false, error: err.message });
+  }
+});
+
+apiRouter.get('/auth/session', (req: Request, res: Response) => {
+  const userId = req.headers['x-user-id'] as string;
+  if (!userId) return res.status(401).json({ success: false, error: 'No session' });
+  const session = authService.getSession(userId);
+  if (!session) return res.status(401).json({ success: false, error: 'Invalid session' });
+  res.json({ success: true, ...session });
+});
+
+// ==========================================
 // 1. Users & Identity
 // ==========================================
-apiRouter.get('/users', (_req: Request, res: Response) => {
-  const users = db.prepare(`SELECT * FROM users ORDER BY name ASC`).all();
-  res.json({ success: true, users });
-});
 
 apiRouter.get('/users/:id', (req: Request, res: Response) => {
   const id = String(req.params.id);
@@ -615,3 +644,129 @@ apiRouter.post('/admin/system/broadcast', (req: Request, res: Response) => {
 
   res.json({ success: true, broadcastCount: allUsers.length });
 });
+
+// ==========================================
+// 8. User & Organizer Onboarding Addendum (§A, §B, §C, §D)
+// ==========================================
+
+// Legacy signup endpoints — redirect to authService
+apiRouter.post('/auth/signup/attendee', (req: Request, res: Response) => {
+  try {
+    const { email, name, phone } = req.body;
+    if (!email || !name) {
+      return res.status(400).json({ success: false, error: 'email and name are required' });
+    }
+    const result = authService.signup({ email, password: `guest_${uuidv4().substring(0,8)}`, name, role: 'attendee', phone });
+    res.json(result);
+  } catch (err: any) {
+    res.status(err.statusCode || 400).json({ success: false, error: err.message });
+  }
+});
+
+apiRouter.post('/auth/signup/organizer', (req: Request, res: Response) => {
+  try {
+    const { email, name, organizationName, phone } = req.body;
+    if (!email || !name || !organizationName) {
+      return res.status(400).json({ success: false, error: 'email, name, and organizationName are required' });
+    }
+    const result = authService.signup({ email, password: `guest_${uuidv4().substring(0,8)}`, name, role: 'organizer', organizationName, phone });
+    res.json(result);
+  } catch (err: any) {
+    res.status(err.statusCode || 400).json({ success: false, error: err.message });
+  }
+});
+
+// Sub-Second Guest Checkout (§A)
+apiRouter.post('/checkout/guest', async (req: Request, res: Response) => {
+  const { email, name, eventId, quantity, idempotencyKey } = req.body;
+  if (!email || !eventId || !quantity) {
+    return res.status(400).json({ success: false, error: 'email, eventId, and quantity required' });
+  }
+
+  const key = idempotencyKey || `idem_guest_${uuidv4()}`;
+
+  try {
+    const result = await onboardingService.guestCheckout({
+      email,
+      name,
+      eventId,
+      quantity: Number(quantity),
+      idempotencyKey: key,
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(err.statusCode || 400).json({ success: false, error: err.message });
+  }
+});
+
+// Get Organizer Profile & Verification Status
+apiRouter.get('/organizer/:organizerId/profile', (req: Request, res: Response) => {
+  const organizerId = String(req.params.organizerId);
+  const profile = onboardingService.getOrganizerProfile(organizerId);
+  if (!profile) {
+    return res.status(404).json({ success: false, error: 'Organizer profile not found' });
+  }
+  res.json({ success: true, profile });
+});
+
+// Initiate Processor Hosted Verification (§B.2)
+apiRouter.post('/organizer/:organizerId/verify/initiate', (req: Request, res: Response) => {
+  const organizerId = String(req.params.organizerId);
+  try {
+    const result = onboardingService.initiateVerification(organizerId);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// Complete / Simulate Webhook Verification (§B.4)
+apiRouter.post('/organizer/:organizerId/verify/complete', (req: Request, res: Response) => {
+  const organizerId = String(req.params.organizerId);
+  const { outcome } = req.body; // 'approved' | 'rejected' | 'flagged'
+  try {
+    const result = onboardingService.completeVerification(organizerId, outcome || 'approved');
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// Hard-Blocked Event Publishing (§B.7 & §C)
+apiRouter.post('/organizer/:organizerId/events/:eventId/publish', (req: Request, res: Response) => {
+  const organizerId = String(req.params.organizerId);
+  const eventId = String(req.params.eventId);
+
+  try {
+    const result = onboardingService.publishEvent(organizerId, eventId);
+    res.json(result);
+  } catch (err: any) {
+    res.status(err.statusCode || 400).json({
+      success: false,
+      error: err.message,
+      requiresVerification: err.requiresVerification || false,
+      verificationStatus: err.verificationStatus,
+      trustTier: err.trustTier,
+      maxAllowedCapacity: err.maxAllowedCapacity,
+    });
+  }
+});
+
+// Platform Admin Verification Review Queue (§D)
+apiRouter.get('/admin/verification-queue', (_req: Request, res: Response) => {
+  const queue = onboardingService.getAdminVerificationQueue();
+  res.json({ success: true, queue });
+});
+
+// Platform Admin Resolve Verification (§D)
+apiRouter.post('/admin/verification-queue/:organizerId/resolve', (req: Request, res: Response) => {
+  const organizerId = String(req.params.organizerId);
+  const { action } = req.body; // 'approve' | 'reject'
+  if (!['approve', 'reject'].includes(action)) {
+    return res.status(400).json({ success: false, error: 'action must be "approve" or "reject"' });
+  }
+
+  const result = onboardingService.adminResolveVerification(organizerId, action as any);
+  res.json(result);
+});
+

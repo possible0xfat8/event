@@ -56,6 +56,12 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
   const [guestlistSearch, setGuestlistSearch] = useState('');
   const [guestlistLoading, setGuestlistLoading] = useState(false);
 
+  // Organizer Profile & Verification State (§B & §C)
+  const [organizerProfile, setOrganizerProfile] = useState<any>(null);
+  const [showVerifyModal, setShowVerifyModal] = useState(false);
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [publishFeedback, setPublishFeedback] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+
   // Refund State with Optimistic UI & Idempotency
   const [refundTicketId, setRefundTicketId] = useState('');
   const [refundLoading, setRefundLoading] = useState(false);
@@ -100,18 +106,24 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
     }
   };
 
+  const fetchProfile = async () => {
+    try {
+      const res = await api.getOrganizerProfile(currentUser.id);
+      if (res.success) {
+        setOrganizerProfile(res.profile);
+      }
+    } catch (_) {}
+  };
+
   // Real-time live polling (short poll every 3 seconds for zero manual refresh)
   useEffect(() => {
     fetchAnalytics();
-    api.getUsers().then(users => {
-      const filtered = users.filter(u => !u.id.startsWith('usr_buyer_concurrency_'));
-      setAllUsers(filtered);
-      if (filtered.length > 0 && !selectedStaffUserId) {
-        setSelectedStaffUserId(filtered[0].id);
-      }
-    });
+    fetchProfile();
 
-    const interval = setInterval(() => fetchAnalytics(false), 3000);
+    const interval = setInterval(() => {
+      fetchAnalytics(false);
+      fetchProfile();
+    }, 3000);
     return () => clearInterval(interval);
   }, [currentUser.id, currentUser.role]);
 
@@ -136,6 +148,52 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
       }).catch(() => setGuestlistLoading(false));
     }
   }, [selectedEventId, currentUser.id]);
+
+  const handleInitiateVerification = async () => {
+    setVerifyLoading(true);
+    try {
+      await api.initiateVerification(currentUser.id);
+      fetchProfile();
+    } catch (err: any) {
+      alert(`Error initiating verification: ${err.message}`);
+    } finally {
+      setVerifyLoading(false);
+    }
+  };
+
+  const handleCompleteVerification = async (outcome: 'approved' | 'rejected' | 'flagged' = 'approved') => {
+    setVerifyLoading(true);
+    try {
+      await api.completeVerification(currentUser.id, outcome);
+      fetchProfile();
+      fetchAnalytics(true);
+      setShowVerifyModal(false);
+    } catch (err: any) {
+      alert(`Verification completion error: ${err.message}`);
+    } finally {
+      setVerifyLoading(false);
+    }
+  };
+
+  const handlePublishEvent = async (eventId: string) => {
+    setPublishFeedback(null);
+    try {
+      const res = await api.publishOrganizerEvent(currentUser.id, eventId);
+      if (res.success) {
+        setPublishFeedback({ msg: '✓ Event published successfully and live on explore map!', type: 'success' });
+        fetchAnalytics(true);
+        onRefreshEvents();
+      } else {
+        if (res.requiresVerification) {
+          setShowVerifyModal(true);
+        }
+        setPublishFeedback({ msg: res.error || 'Failed to publish event', type: 'error' });
+      }
+    } catch (err: any) {
+      setShowVerifyModal(true);
+      setPublishFeedback({ msg: err.message, type: 'error' });
+    }
+  };
 
   // Initialize interactive Leaflet Map Pin picker inside Modal
   useEffect(() => {
@@ -489,6 +547,47 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
         })}
       </div>
 
+      {/* Verification Status Banner (§B & §C) */}
+      {organizerProfile && organizerProfile.verification_status !== 'verified' && (
+        <div className="p-4 rounded-3xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-amber-300 flex items-center justify-center flex-shrink-0">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h4 className="font-bold text-white">Account in Free Draft Mode ({organizerProfile.organization_name})</h4>
+                <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                  {organizerProfile.verification_status}
+                </span>
+              </div>
+              <p className="text-slate-300 mt-0.5">
+                You can draft unlimited events for free. Complete payout verification to publish events live to attendees.
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setShowVerifyModal(true)}
+            className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 font-black text-xs hover:opacity-90 transition flex items-center gap-1.5 self-end sm:self-center shadow-lg"
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>Connect Payouts & Verify</span>
+          </button>
+        </div>
+      )}
+
+      {publishFeedback && (
+        <div className={`p-3.5 rounded-2xl text-xs font-semibold flex items-center justify-between gap-2 ${
+          publishFeedback.type === 'success' 
+            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+            : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+        }`}>
+          <span>{publishFeedback.msg}</span>
+          <button onClick={() => setPublishFeedback(null)} className="text-slate-400 hover:text-white">✕</button>
+        </div>
+      )}
+
       {/* SCREEN 1: EVENTS LIST (Core Screen #1) */}
       {activeTab === 'events_list' && (
         <div className="space-y-4 animate-in fade-in duration-150">
@@ -530,27 +629,39 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
                   </div>
 
                   <div className="flex items-center justify-between pt-2 border-t border-[#1c2236] text-xs">
-                    <button
-                      onClick={() => {
-                        setSelectedEventId(evt.id);
-                        setActiveTab('sales_dashboard');
-                      }}
-                      className="px-3 py-1.5 rounded-xl bg-[#181d2f] hover:bg-[#202840] text-slate-200 font-bold text-[11px] flex items-center gap-1 transition"
-                    >
-                      <BarChart3 className="w-3.5 h-3.5 text-[#00f0ff]" />
-                      <span>Sales & Telemetry</span>
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => {
+                          setSelectedEventId(evt.id);
+                          setActiveTab('sales_dashboard');
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-[#181d2f] hover:bg-[#202840] text-slate-200 font-bold text-[11px] flex items-center gap-1 transition"
+                      >
+                        <BarChart3 className="w-3.5 h-3.5 text-[#00f0ff]" />
+                        <span>Sales</span>
+                      </button>
 
-                    <button
-                      onClick={() => {
-                        setSelectedEventId(evt.id);
-                        setActiveTab('readiness');
-                      }}
-                      className="px-3 py-1.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 font-bold text-[11px] flex items-center gap-1 transition"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Readiness Checklist</span>
-                    </button>
+                      <button
+                        onClick={() => {
+                          setSelectedEventId(evt.id);
+                          setActiveTab('readiness');
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 font-bold text-[11px] flex items-center gap-1 transition"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Readiness</span>
+                      </button>
+                    </div>
+
+                    {evt.status === 'draft' && (
+                      <button
+                        onClick={() => handlePublishEvent(evt.id)}
+                        className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#00ff88] to-[#00f0ff] text-slate-950 font-black text-[11px] hover:opacity-90 transition shadow-md flex items-center gap-1"
+                      >
+                        <Sparkles className="w-3 h-3" />
+                        <span>Publish Live</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -1240,10 +1351,66 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
                   disabled={createLoading}
                   className="px-5 py-2 rounded-xl bg-gradient-to-r from-[#ff2d75] to-[#9d4edd] text-white font-bold hover:opacity-90 transition disabled:opacity-40 shadow-lg shadow-pink-500/20"
                 >
-                  {createLoading ? 'Publishing...' : 'Publish Verified Event'}
+                  {createLoading ? 'Publishing...' : 'Save & Publish Event'}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* HOSTED PROCESSOR ONBOARDING & VERIFICATION MODAL (§B.2 & §B.3) */}
+      {showVerifyModal && (
+        <div className="fixed inset-0 z-[99999] bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#121522] border border-[#28324a] rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl animate-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-[#20273c] pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-purple-500/20 text-purple-300 flex items-center justify-center">
+                  <ShieldCheck className="w-4 h-4" />
+                </div>
+                <h3 className="font-display font-black text-base text-white">Hosted Payout Verification</h3>
+              </div>
+              <button onClick={() => setShowVerifyModal(false)} className="text-slate-400 hover:text-white text-xs">✕</button>
+            </div>
+
+            <div className="space-y-3 text-xs text-slate-300">
+              <p>
+                To comply with banking regulations and receive ticket payout proceeds directly to your account, complete identity verification via our payment processor's hosted flow (Stripe Connect Express).
+              </p>
+
+              <div className="p-3.5 rounded-2xl bg-[#181d2f] border border-[#263048] space-y-2">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-slate-400">Security & Privacy:</span>
+                  <span className="text-emerald-400 font-bold">100% Compliant</span>
+                </div>
+                <p className="text-[10px] text-slate-400">
+                  Zero raw government documents or bank numbers are stored on EVNT servers. All verification is handled directly by regulated payment processor infrastructure.
+                </p>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-purple-500/10 border border-purple-500/30 text-[11px] text-purple-300">
+                <span className="font-bold">Trust Tier 1 Rules:</span> First-time organizers receive a 3-day post-event payout hold and a 250-ticket capacity limit, auto-relaxing with clean event history.
+              </div>
+            </div>
+
+            <div className="pt-2 space-y-2">
+              <button
+                onClick={() => handleCompleteVerification('approved')}
+                disabled={verifyLoading}
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-[#00ff88] to-[#00f0ff] text-slate-950 font-black text-xs hover:opacity-90 transition shadow-lg flex items-center justify-center gap-1.5"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>{verifyLoading ? 'Connecting...' : 'Launch Hosted Verification & Approve'}</span>
+              </button>
+
+              <button
+                onClick={() => handleCompleteVerification('flagged')}
+                disabled={verifyLoading}
+                className="w-full py-2 rounded-xl bg-[#181d2f] hover:bg-[#202840] border border-[#2a344d] text-slate-300 font-bold text-[11px] transition"
+              >
+                Simulate Manual Review Queue Trigger
+              </button>
+            </div>
           </div>
         </div>
       )}

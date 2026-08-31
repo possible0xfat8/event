@@ -1,7 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cryptoService } from '../services/cryptoService.js';
 import { SCHEMA_SQL } from './schema.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -49,98 +48,37 @@ export function initDatabase(dbPath?: string): DBWrapper {
   const finalPath = dbPath || path.join(__dirname, '../../data.db');
   const db = new DBWrapper(finalPath);
 
-  // Load schema from bundled constant
+  // Load schema
   db.exec(SCHEMA_SQL);
 
-  // Seed sample data if empty or upgrade users
-  seedInitialData(db);
+  // Seed explore events if DB is empty (so the map isn't barren)
+  seedExploreEvents(db);
 
   return db;
 }
 
-export function seedInitialData(db: DBWrapper) {
-  const userCountRow = db.prepare('SELECT COUNT(*) as count FROM users').get() as any;
-  if (userCountRow && userCountRow.count > 0) {
-    // If users already exist, ensure roles are aligned
-    try {
-      db.exec(`UPDATE users SET role = 'attendee' WHERE id IN ('usr_alex', 'usr_sarah', 'usr_marcus');`);
-      db.exec(`UPDATE users SET role = 'staff' WHERE id IN ('usr_scanner_dave', 'usr_staff_dave');`);
-      db.exec(`UPDATE users SET role = 'organizer' WHERE id = 'usr_organizer_maya';`);
-      db.exec(`UPDATE users SET role = 'admin' WHERE id = 'usr_admin_elena';`);
-      
-      // Ensure super admin user exists
-      db.exec(`
-        INSERT OR IGNORE INTO users (id, email, name, avatar, role)
-        VALUES ('usr_admin_elena', 'elena.admin@evnt.live', 'Elena Vance (Super Admin)', 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150', 'admin');
-      `);
-    } catch (_) {}
-    return;
+// ---------------------------------------------------------------------------
+// Seed Events — keep the explore map populated with real venues
+// These events are owned by a system organizer that's auto-created
+// ---------------------------------------------------------------------------
+function seedExploreEvents(db: DBWrapper) {
+  const eventCount = (db.prepare('SELECT COUNT(*) as count FROM events').get() as any).count;
+  if (eventCount > 0) return; // Already seeded
+
+  // Create a system organizer to own seed events
+  const systemUser = db.prepare('SELECT id FROM users WHERE id = ?').get('usr_system') as any;
+  if (!systemUser) {
+    db.prepare(`
+      INSERT INTO users (id, email, name, avatar, role)
+      VALUES ('usr_system', 'system@evnt.live', 'EVNT Platform', 'https://ui-avatars.com/api/?name=EV&background=ff2d75&color=fff&size=150&bold=true&format=svg', 'organizer')
+    `).run();
+
+    db.prepare(`
+      INSERT OR IGNORE INTO organizer_profiles (user_id, organization_name, verification_status, payout_account_id, trust_tier, completed_events_count, verified_at)
+      VALUES ('usr_system', 'EVNT Official Showcases', 'verified', 'acct_system_platform', 3, 50, datetime('now', '-90 days'))
+    `).run();
   }
 
-  // 1. Insert Users first
-  const insertUser = db.prepare(`
-    INSERT INTO users (id, email, name, avatar, role)
-    VALUES (?, ?, ?, ?, ?)
-  `);
-
-  const users = [
-    { id: 'usr_alex', email: 'alex@evnt.live', name: 'Alex Rivera', avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150', role: 'attendee' },
-    { id: 'usr_sarah', email: 'sarah@evnt.live', name: 'Sarah Chen', avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150', role: 'attendee' },
-    { id: 'usr_marcus', email: 'marcus@evnt.live', name: 'Marcus Adebayo (Lagos)', avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150', role: 'attendee' },
-    { id: 'usr_staff_dave', email: 'dave@security.evnt', name: 'Dave (Door Staff - Gate 1)', avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150', role: 'staff' },
-    { id: 'usr_organizer_maya', email: 'maya@subterranean.events', name: 'Maya Lin (Event Organizer)', avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150', role: 'organizer' },
-    { id: 'usr_admin_elena', email: 'elena.admin@evnt.live', name: 'Elena Vance (Super Admin)', avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150', role: 'admin' },
-  ];
-
-  for (const u of users) {
-    insertUser.run(u.id, u.email, u.name, u.avatar, u.role);
-  }
-
-  // 2. Insert Events
-  seedNigeriaAndGlobalEvents(db);
-
-  // 3. Insert Friendships
-  const insertFriend = db.prepare(`INSERT OR IGNORE INTO friends (user_id, friend_id) VALUES (?, ?)`);
-  insertFriend.run('usr_alex', 'usr_sarah');
-  insertFriend.run('usr_sarah', 'usr_alex');
-  insertFriend.run('usr_alex', 'usr_marcus');
-  insertFriend.run('usr_marcus', 'usr_alex');
-  insertFriend.run('usr_sarah', 'usr_marcus');
-  insertFriend.run('usr_marcus', 'usr_sarah');
-
-  // 4. Pre-seed orders and valid tickets
-  const insertOrder = db.prepare(`
-    INSERT INTO orders (id, buyer_user_id, event_id, quantity, total_amount, payment_intent_id, idempotency_key, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  const insertTicket = db.prepare(`
-    INSERT INTO tickets (id, event_id, owner_user_id, order_id, status, signed_token)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
-
-  // Sarah has a ticket to Subterranean Bushwick
-  const sarahTicketId = 'tkt_sarah_bushwick_001';
-  const sarahToken = cryptoService.signTicket(sarahTicketId, 'evt_boiler_room_bushwick', 'usr_sarah');
-  insertOrder.run('ord_sarah_001', 'usr_sarah', 'evt_boiler_room_bushwick', 1, 25.00, 'pi_mock_sarah_001', 'idem_sarah_001', 'confirmed');
-  insertTicket.run(sarahTicketId, 'evt_boiler_room_bushwick', 'usr_sarah', 'ord_sarah_001', 'valid', sarahToken);
-
-  // Marcus has a ticket to Obi's House Lagos
-  const marcusTicketId = 'tkt_marcus_lagos_002';
-  const marcusToken = cryptoService.signTicket(marcusTicketId, 'evt_obis_house_lagos', 'usr_marcus');
-  insertOrder.run('ord_marcus_002', 'usr_marcus', 'evt_obis_house_lagos', 1, 15.00, 'pi_mock_marcus_002', 'idem_marcus_002', 'confirmed');
-  insertTicket.run(marcusTicketId, 'evt_obis_house_lagos', 'usr_marcus', 'ord_marcus_002', 'valid', marcusToken);
-
-  // 5. Social "Going" Seeds
-  const insertGoing = db.prepare(`
-    INSERT INTO going (user_id, event_id, visibility)
-    VALUES (?, ?, ?)
-  `);
-  insertGoing.run('usr_sarah', 'evt_boiler_room_bushwick', 'friends_only');
-  insertGoing.run('usr_marcus', 'evt_obis_house_lagos', 'public');
-  insertGoing.run('usr_sarah', 'evt_obis_house_lagos', 'friends_only');
-}
-
-function seedNigeriaAndGlobalEvents(db: DBWrapper) {
   const insertEvent = db.prepare(`
     INSERT INTO events (
       id, organizer_id, title, description, lat, lng, venue_name, venue_address,
@@ -165,106 +103,71 @@ function seedNigeriaAndGlobalEvents(db: DBWrapper) {
     // 🇳🇬 Nigeria (Lagos & Abuja) Events
     {
       id: 'evt_obis_house_lagos',
-      organizer_id: 'usr_organizer_maya',
+      organizer_id: 'usr_system',
       title: "Obi's House: Underground Afrobeats & Amapiano Live",
       description: 'Lagos most electrifying weekly underground rave. 360 stage, live drums, unreleased Afrobeats dubplates, and non-stop Amapiano energy till dawn.',
-      lat: 6.4253,
-      lng: 3.4219,
+      lat: 6.4253, lng: 3.4219,
       venue_name: 'Hard Rock Cafe Stage, Landmark Beach',
       venue_address: 'Water Corporation Dr, Victoria Island, Lagos',
-      start_time: tonight,
-      end_time: tonightEnd,
-      category: 'club',
-      capacity: 500,
-      tickets_remaining: 32,
-      price: 15.00,
-      resale_allowed: 1,
-      resale_price_cap: 1.20,
-      status: 'published',
+      start_time: tonight, end_time: tonightEnd,
+      category: 'club', capacity: 500, tickets_remaining: 32, price: 15.00,
+      resale_allowed: 1, resale_price_cap: 1.20, status: 'published',
       image_url: 'https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=800',
       vibe_tags: JSON.stringify(['Amapiano', 'Afrobeats', 'Landmark Beach', 'Obis House', 'Lagos Nightlife']),
     },
     {
       id: 'evt_moist_beach_rave_lagos',
-      organizer_id: 'usr_organizer_maya',
+      organizer_id: 'usr_system',
       title: 'Moist Beach Club: Sunset Afro-House & Cocktails',
       description: 'Oceanfront sunset sessions with panoramic Atlantic views. Deep afro-house, crafted tropical cocktails, and secret guest DJ sets right on the sand.',
-      lat: 6.4281,
-      lng: 3.4358,
+      lat: 6.4281, lng: 3.4358,
       venue_name: 'Moist Beach Club',
       venue_address: 'Ligali Ayorinde St, Oniru Private Beach, Victoria Island, Lagos',
-      start_time: tomorrow,
-      end_time: tomorrowEnd,
-      category: 'rooftop',
-      capacity: 350,
-      tickets_remaining: 45,
-      price: 20.00,
-      resale_allowed: 1,
-      resale_price_cap: 1.15,
-      status: 'published',
+      start_time: tomorrow, end_time: tomorrowEnd,
+      category: 'rooftop', capacity: 350, tickets_remaining: 45, price: 20.00,
+      resale_allowed: 1, resale_price_cap: 1.15, status: 'published',
       image_url: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800',
       vibe_tags: JSON.stringify(['Sunset', 'Beach Rave', 'Afro House', 'Oniru', 'Cocktails']),
     },
     {
       id: 'evt_lekki_secret_suya_popup',
-      organizer_id: 'usr_organizer_maya',
+      organizer_id: 'usr_system',
       title: 'Midnight Suya, Alté & UK Drill Warehouse Pop-Up',
       description: 'Gourmet charcoal-smoked suya meet live Alté soundscapes and UK Drill. Ticket includes admission and a platter of prime suya with signature spices.',
-      lat: 6.4474,
-      lng: 3.4723,
+      lat: 6.4474, lng: 3.4723,
       venue_name: 'The Greenhouse Warehouse',
       venue_address: 'Admiralty Way, Lekki Phase 1, Lagos',
-      start_time: thisWeekend,
-      end_time: thisWeekendEnd,
-      category: 'popup',
-      capacity: 120,
-      tickets_remaining: 14,
-      price: 18.00,
-      resale_allowed: 1,
-      resale_price_cap: 1.10,
-      status: 'published',
+      start_time: thisWeekend, end_time: thisWeekendEnd,
+      category: 'popup', capacity: 120, tickets_remaining: 14, price: 18.00,
+      resale_allowed: 1, resale_price_cap: 1.10, status: 'published',
       image_url: 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=800',
       vibe_tags: JSON.stringify(['Alté', 'Suya', 'Lekki Phase 1', 'Secret Pop-up', 'Drill']),
     },
     {
       id: 'evt_fela_shrine_experience',
-      organizer_id: 'usr_organizer_maya',
+      organizer_id: 'usr_system',
       title: 'Afrika Shrine Live: Afrobeat Heritage & Brass Session',
       description: 'Legendary live Afrobeat celebration with massive horn sections, hypnotic brass rhythms, and conscious music in the heart of Ikeja.',
-      lat: 6.5956,
-      lng: 3.3558,
+      lat: 6.5956, lng: 3.3558,
       venue_name: 'New Afrika Shrine',
       venue_address: 'NERDC Rd, Agidingbi, Ikeja, Lagos',
-      start_time: thisWeekend,
-      end_time: thisWeekendEnd,
-      category: 'gig',
-      capacity: 800,
-      tickets_remaining: 65,
-      price: 12.00,
-      resale_allowed: 1,
-      resale_price_cap: 1.10,
-      status: 'published',
+      start_time: thisWeekend, end_time: thisWeekendEnd,
+      category: 'gig', capacity: 800, tickets_remaining: 65, price: 12.00,
+      resale_allowed: 1, resale_price_cap: 1.10, status: 'published',
       image_url: 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800',
       vibe_tags: JSON.stringify(['Afrobeat', 'Afrika Shrine', 'Ikeja', 'Live Band', 'Brass']),
     },
     {
       id: 'evt_abuja_play_lounge',
-      organizer_id: 'usr_organizer_maya',
+      organizer_id: 'usr_system',
       title: 'Capital Pulse: Wuse 2 Rooftop Afro-Fusion',
       description: 'Exclusive skyline view in the heart of Abuja. Melodic Afrobeats, Amapiano, fine wines, and luxury lounge atmosphere.',
-      lat: 9.0765,
-      lng: 7.4721,
+      lat: 9.0765, lng: 7.4721,
       venue_name: 'Play Imperial Lounge',
       venue_address: '167 Aminu Kano Crescent, Wuse 2, Abuja',
-      start_time: tomorrow,
-      end_time: tomorrowEnd,
-      category: 'club',
-      capacity: 250,
-      tickets_remaining: 28,
-      price: 25.00,
-      resale_allowed: 1,
-      resale_price_cap: 1.20,
-      status: 'published',
+      start_time: tomorrow, end_time: tomorrowEnd,
+      category: 'club', capacity: 250, tickets_remaining: 28, price: 25.00,
+      resale_allowed: 1, resale_price_cap: 1.20, status: 'published',
       image_url: 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=800',
       vibe_tags: JSON.stringify(['Abuja Nightlife', 'Wuse 2', 'Rooftop', 'Afro Fusion', 'Luxury']),
     },
@@ -272,64 +175,43 @@ function seedNigeriaAndGlobalEvents(db: DBWrapper) {
     // Global / NYC Events
     {
       id: 'evt_boiler_room_bushwick',
-      organizer_id: 'usr_organizer_maya',
+      organizer_id: 'usr_system',
       title: 'Subterranean: Industrial Techno & Modular Live',
       description: 'Raw analog synthesis, 4-point Funktion-One sound, secret warehouse location in Bushwick. Unreleased dubplates and live visual mapping.',
-      lat: 40.7061,
-      lng: -73.9248,
+      lat: 40.7061, lng: -73.9248,
       venue_name: 'The Foundry Warehouse',
       venue_address: '28 Meadow St, Brooklyn, NY 11206',
-      start_time: tonight,
-      end_time: tonightEnd,
-      category: 'club',
-      capacity: 350,
-      tickets_remaining: 18,
-      price: 25.00,
-      resale_allowed: 1,
-      resale_price_cap: 1.20,
-      status: 'published',
+      start_time: tonight, end_time: tonightEnd,
+      category: 'club', capacity: 350, tickets_remaining: 18, price: 25.00,
+      resale_allowed: 1, resale_price_cap: 1.20, status: 'published',
       image_url: 'https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=800',
       vibe_tags: JSON.stringify(['Techno', 'Funktion-One', 'Secret Venue', 'Late Night', 'Visuals']),
     },
     {
       id: 'evt_rooftop_sunset_sessions',
-      organizer_id: 'usr_organizer_maya',
+      organizer_id: 'usr_system',
       title: 'Neon Horizon: Sunset House & Disco',
       description: 'Open-air panoramic Manhattan skyline view, craft spritzes, melodic deep house, and cosmic disco. 21+ only.',
-      lat: 40.7193,
-      lng: -73.9613,
+      lat: 40.7193, lng: -73.9613,
       venue_name: 'Skyline Overlook Roof',
       venue_address: '74 Wythe Ave, Brooklyn, NY 11249',
-      start_time: tomorrow,
-      end_time: tomorrowEnd,
-      category: 'rooftop',
-      capacity: 200,
-      tickets_remaining: 42,
-      price: 30.00,
-      resale_allowed: 1,
-      resale_price_cap: 1.15,
-      status: 'published',
+      start_time: tomorrow, end_time: tomorrowEnd,
+      category: 'rooftop', capacity: 200, tickets_remaining: 42, price: 30.00,
+      resale_allowed: 1, resale_price_cap: 1.15, status: 'published',
       image_url: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800',
       vibe_tags: JSON.stringify(['Sunset', 'Deep House', 'Rooftop', 'Cocktails', 'Disco']),
     },
     {
       id: 'evt_les_indie_psych',
-      organizer_id: 'usr_organizer_maya',
+      organizer_id: 'usr_system',
       title: 'Velvet Echoes: Psychedelic Post-Punk Live',
       description: 'Intimate basement show featuring three underground breakout post-punk bands. Limited capacity, vinyl DJs between sets.',
-      lat: 40.7188,
-      lng: -73.9877,
+      lat: 40.7188, lng: -73.9877,
       venue_name: 'Cellar 142',
       venue_address: '142 Orchard St, New York, NY 10002',
-      start_time: tonight,
-      end_time: tonightEnd,
-      category: 'gig',
-      capacity: 90,
-      tickets_remaining: 6,
-      price: 18.00,
-      resale_allowed: 1,
-      resale_price_cap: 1.10,
-      status: 'published',
+      start_time: tonight, end_time: tonightEnd,
+      category: 'gig', capacity: 90, tickets_remaining: 6, price: 18.00,
+      resale_allowed: 1, resale_price_cap: 1.10, status: 'published',
       image_url: 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800',
       vibe_tags: JSON.stringify(['Post-Punk', 'Live Gig', 'Basement', 'Indie', 'Vinyl']),
     },

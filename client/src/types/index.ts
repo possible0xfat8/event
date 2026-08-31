@@ -4,6 +4,7 @@ export interface User {
   id: string;
   email: string;
   name: string;
+  phone?: string;
   avatar: string;
   role: UserRole;
 }
@@ -25,7 +26,7 @@ export interface EventItem {
   price: number;
   resale_allowed: number;
   resale_price_cap: number;
-  status: 'published' | 'cancelled' | 'ended';
+  status: 'draft' | 'published' | 'cancelled' | 'ended';
   image_url: string;
   vibe_tags: string[];
   distanceKm?: number;

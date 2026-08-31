@@ -8,7 +8,44 @@ import { v4 as uuidv4 } from 'uuid';
 
 describe('EVNT Acceptance Criteria Test Suite (evnt.pdf §12)', () => {
   beforeAll(() => {
-    // Ensure DB is initialized
+    // Ensure test fixtures exist for isolated acceptance testing
+    const insertUser = db.prepare(`
+      INSERT OR IGNORE INTO users (id, email, name, avatar, role)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+
+    insertUser.run('usr_alex', 'alex@example.com', 'Alex Rivera', 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150', 'attendee');
+    insertUser.run('usr_sarah', 'sarah@example.com', 'Sarah Chen', 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150', 'attendee');
+    insertUser.run('usr_marcus', 'marcus@example.com', 'Marcus Adebayo', 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150', 'attendee');
+    insertUser.run('usr_staff_dave', 'dave@example.com', 'Dave Gate Lead', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150', 'staff');
+    insertUser.run('usr_organizer_maya', 'maya@soundwave.events', 'Maya Lin (SoundWave)', 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150', 'organizer');
+    insertUser.run('usr_admin_elena', 'admin@evnt.live', 'Elena Rostova (SuperAdmin)', 'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=150', 'admin');
+
+    db.prepare(`
+      INSERT OR IGNORE INTO organizer_profiles (user_id, organization_name, verification_status, payout_account_id, trust_tier, completed_events_count, verified_at)
+      VALUES ('usr_organizer_maya', 'SoundWave Productions', 'verified', 'acct_stripe_express_test_123', 2, 8, datetime('now', '-30 days'))
+    `).run();
+
+    // Friendships for social graph tests
+    const insertFriend = db.prepare(`INSERT OR IGNORE INTO friends (user_id, friend_id, status) VALUES (?, ?, 'accepted')`);
+    insertFriend.run('usr_sarah', 'usr_marcus');
+    insertFriend.run('usr_marcus', 'usr_sarah');
+    insertFriend.run('usr_alex', 'usr_sarah');
+    insertFriend.run('usr_sarah', 'usr_alex');
+
+    // Test event for Criterion 5
+    db.prepare(`
+      INSERT OR IGNORE INTO events (
+        id, organizer_id, title, description, lat, lng, venue_name, venue_address,
+        start_time, end_time, category, capacity, tickets_remaining, price,
+        resale_allowed, resale_price_cap, status
+      ) VALUES (
+        'evt_immersive_ambient_dome', 'usr_organizer_maya', 'Immersive Ambient Dome', '360 visuals',
+        40.7128, -74.006, 'The Dome', 'Brooklyn',
+        datetime('now', '+2 hours'), datetime('now', '+6 hours'),
+        'art', 100, 100, 15.00, 1, 1.20, 'published'
+      )
+    `).run();
   });
 
   // =========================================================================
@@ -394,15 +431,16 @@ describe('EVNT Acceptance Criteria Test Suite (evnt.pdf §12)', () => {
 
     // 2. Perform a test scan for this event
     const ticketId = `tkt_test_scan_${Date.now()}`;
+    const readinessOrderId = `ord_readiness_${Date.now()}`;
     const token = cryptoService.signTicket(ticketId, testEventId, 'usr_alex');
     db.prepare(`
       INSERT INTO orders (id, buyer_user_id, event_id, quantity, total_amount, payment_intent_id, idempotency_key, status)
       VALUES (?, 'usr_alex', ?, 1, 30.00, ?, ?, 'confirmed')
-    `).run(`ord_readiness_${Date.now()}`, testEventId, `pi_readiness_${Date.now()}`, `idem_readiness_${Date.now()}`);
+    `).run(readinessOrderId, testEventId, `pi_readiness_${Date.now()}`, `idem_readiness_${Date.now()}`);
     db.prepare(`
       INSERT INTO tickets (id, event_id, owner_user_id, order_id, status, signed_token)
       VALUES (?, ?, 'usr_alex', ?, 'valid', ?)
-    `).run(ticketId, testEventId, `ord_readiness_${Date.now()}`, token);
+    `).run(ticketId, testEventId, readinessOrderId, token);
 
     await request(app)
       .post('/api/verify/scan')
@@ -455,5 +493,239 @@ describe('EVNT Acceptance Criteria Test Suite (evnt.pdf §12)', () => {
     expect(csvRes.headers['content-disposition']).toContain('attachment');
     expect(csvRes.text).toContain('Order ID,Ticket ID,Event Title');
     expect(csvRes.text).toContain('Platform Fee ($)');
+  });
+
+  // =========================================================================
+  // 12. Attendee Guest Checkout (§A)
+  // =========================================================================
+  it('Criterion 12: Attendee can complete ticket purchase via guest checkout without prior account creation', async () => {
+    const guestEmail = `guest_${Date.now()}@gmail.com`;
+    const res = await request(app)
+      .post('/api/checkout/guest')
+      .send({
+        email: guestEmail,
+        name: 'Guest FestGoer',
+        eventId: 'evt_boiler_room_bushwick',
+        quantity: 1,
+        idempotencyKey: `idem_guest_test_${Date.now()}`,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.isGuestCheckout).toBe(true);
+    expect(res.body.tickets.length).toBe(1);
+    expect(res.body.tickets[0].signedToken).toBeDefined();
+    expect(res.body.claimAccountUrl).toContain(encodeURIComponent(guestEmail));
+
+    // Verify cryptographic token is valid for gate entry
+    const scanRes = await request(app)
+      .post('/api/verify/scan')
+      .send({
+        token: res.body.tickets[0].signedToken,
+        scannerDeviceId: 'gate_test_scanner',
+        targetEventId: 'evt_boiler_room_bushwick',
+      });
+    expect(scanRes.status).toBe(200);
+    expect(scanRes.body.valid).toBe(true);
+  });
+
+  // =========================================================================
+  // 13. Instant Organizer Signup & Free Drafting (§B.1)
+  // =========================================================================
+  it('Criterion 13: Organizer can sign up and build a complete draft event with zero identity verification required', async () => {
+    const orgEmail = `neworg_${Date.now()}@soundwave.live`;
+    const signupRes = await request(app)
+      .post('/api/auth/signup/organizer')
+      .send({
+        email: orgEmail,
+        name: 'Chioma Ade',
+        organizationName: 'SoundWave Lagos',
+      });
+
+    expect(signupRes.status).toBe(200);
+    expect(signupRes.body.success).toBe(true);
+    expect(signupRes.body.profile.verification_status).toBe('unverified');
+
+    const organizerId = signupRes.body.user.id;
+
+    // Create a full draft event immediately with zero KYC
+    const draftEventRes = await request(app)
+      .post('/api/events')
+      .send({
+        organizer_id: organizerId,
+        title: 'SoundWave Sunset Beach Party',
+        description: 'Underground beach party in Lekki',
+        lat: 6.4474,
+        lng: 3.4735,
+        venue_name: 'Elegushi Beach',
+        venue_address: 'Lekki Phase 1, Lagos',
+        start_time: '2026-10-10T18:00:00Z',
+        end_time: '2026-10-11T02:00:00Z',
+        category: 'club',
+        capacity: 200,
+        price: 20.00,
+        status: 'draft',
+      });
+
+    expect(draftEventRes.status).toBe(201);
+    expect(draftEventRes.body.success).toBe(true);
+    expect(draftEventRes.body.event.status).toBe('draft');
+  });
+
+  // =========================================================================
+  // 14. Server-Side Publishing Gate (§B.7 & §C)
+  // =========================================================================
+  it('Criterion 14: Publishing an event is hard-blocked server-side until verification_status = verified', async () => {
+    const orgEmail = `blocked_org_${Date.now()}@gmail.com`;
+    const signup = await request(app)
+      .post('/api/auth/signup/organizer')
+      .send({
+        email: orgEmail,
+        name: 'Fola B',
+        organizationName: 'Unverified Promos',
+      });
+
+    const organizerId = signup.body.user.id;
+
+    const draftEvent = await request(app)
+      .post('/api/events')
+      .send({
+        organizer_id: organizerId,
+        title: 'Unverified Gig',
+        description: 'Test',
+        lat: 6.44,
+        lng: 3.47,
+        venue_name: 'Lagos Spot',
+        venue_address: 'Lagos',
+        start_time: '2026-11-01T18:00:00Z',
+        end_time: '2026-11-01T23:00:00Z',
+        category: 'gig',
+        capacity: 100,
+        price: 10.00,
+        status: 'draft',
+      });
+
+    const eventId = draftEvent.body.event.id;
+
+    // 1. Attempt to publish while unverified -> MUST RETURN 403 Forbidden with clear reason!
+    const publishAttempt1 = await request(app)
+      .post(`/api/organizer/${organizerId}/events/${eventId}/publish`);
+
+    expect(publishAttempt1.status).toBe(403);
+    expect(publishAttempt1.body.success).toBe(false);
+    expect(publishAttempt1.body.requiresVerification).toBe(true);
+    expect(publishAttempt1.body.error).toContain('Complete payout verification to publish events');
+
+    // 2. Initiate processor hosted onboarding flow (§B.2)
+    const initiateRes = await request(app)
+      .post(`/api/organizer/${organizerId}/verify/initiate`);
+
+    expect(initiateRes.status).toBe(200);
+    expect(initiateRes.body.payoutAccountId).toContain('acct_stripe_express_');
+    expect(initiateRes.body.hostedOnboardingUrl).toContain('connect.stripe.com');
+
+    // 3. Complete verification webhook simulation
+    await request(app)
+      .post(`/api/organizer/${organizerId}/verify/complete`)
+      .send({ outcome: 'approved' });
+
+    // 4. Now publishing MUST SUCCEED!
+    const publishAttempt2 = await request(app)
+      .post(`/api/organizer/${organizerId}/events/${eventId}/publish`);
+
+    expect(publishAttempt2.status).toBe(200);
+    expect(publishAttempt2.body.success).toBe(true);
+    expect(publishAttempt2.body.status).toBe('published');
+  });
+
+  // =========================================================================
+  // 15. Trust Tier Volume Cap Enforcement (§B.6)
+  // =========================================================================
+  it('Criterion 15: New organizers in Trust Tier 1 are subject to volume cap (max 250 tickets)', async () => {
+    const orgEmail = `tier1_org_${Date.now()}@gmail.com`;
+    const signup = await request(app)
+      .post('/api/auth/signup/organizer')
+      .send({
+        email: orgEmail,
+        name: 'Tunde O',
+        organizationName: 'Tier 1 Fest',
+      });
+
+    const organizerId = signup.body.user.id;
+
+    // Verify organizer
+    await request(app).post(`/api/organizer/${organizerId}/verify/initiate`);
+    await request(app).post(`/api/organizer/${organizerId}/verify/complete`).send({ outcome: 'approved' });
+
+    // Attempt to publish an event with 500 capacity (exceeding Tier 1 cap of 250)
+    const largeEvent = await request(app)
+      .post('/api/events')
+      .send({
+        organizer_id: organizerId,
+        title: 'Huge 500 Capacity Event',
+        description: 'Cap test',
+        lat: 6.44,
+        lng: 3.47,
+        venue_name: 'Lekki Arena',
+        venue_address: 'Lagos',
+        start_time: '2026-11-01T18:00:00Z',
+        end_time: '2026-11-01T23:00:00Z',
+        category: 'club',
+        capacity: 500,
+        price: 15.00,
+        status: 'draft',
+      });
+
+    const eventId = largeEvent.body.event.id;
+
+    const publishRes = await request(app)
+      .post(`/api/organizer/${organizerId}/events/${eventId}/publish`);
+
+    expect(publishRes.status).toBe(400);
+    expect(publishRes.body.success).toBe(false);
+    expect(publishRes.body.error).toContain('Trust Tier 1 volume cap exceeded');
+    expect(publishRes.body.maxAllowedCapacity).toBe(250);
+  });
+
+  // =========================================================================
+  // 16. Platform Admin Verification Review Queue (§D)
+  // =========================================================================
+  it('Criterion 16: Flagged verification edge cases appear in platform admin review queue and can be resolved', async () => {
+    const orgEmail = `flagged_org_${Date.now()}@gmail.com`;
+    const signup = await request(app)
+      .post('/api/auth/signup/organizer')
+      .send({
+        email: orgEmail,
+        name: 'Kelechi M',
+        organizationName: 'Flagged Raves Ltd',
+      });
+
+    const organizerId = signup.body.user.id;
+
+    // Simulate processor flagging the account for review
+    await request(app).post(`/api/organizer/${organizerId}/verify/initiate`);
+    await request(app).post(`/api/organizer/${organizerId}/verify/complete`).send({ outcome: 'flagged' });
+
+    // 1. Check Platform Admin Review Queue
+    const queueRes = await request(app).get('/api/admin/verification-queue');
+    expect(queueRes.status).toBe(200);
+    expect(queueRes.body.success).toBe(true);
+
+    const flaggedItem = queueRes.body.queue.find((q: any) => q.user_id === organizerId);
+    expect(flaggedItem).toBeDefined();
+    expect(flaggedItem.verification_status).toBe('flagged');
+
+    // 2. Platform Admin approves the item
+    const resolveRes = await request(app)
+      .post(`/api/admin/verification-queue/${organizerId}/resolve`)
+      .send({ action: 'approve' });
+
+    expect(resolveRes.status).toBe(200);
+    expect(resolveRes.body.newStatus).toBe('verified');
+
+    // 3. Verify organizer profile is now verified
+    const profileRes = await request(app).get(`/api/organizer/${organizerId}/profile`);
+    expect(profileRes.status).toBe(200);
+    expect(profileRes.body.profile.verification_status).toBe('verified');
   });
 });

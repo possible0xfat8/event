@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { User, EventItem, FraudAlertLog } from '../types';
 import { api } from '../services/api';
 import { 
-  ShieldAlert, Users, Calendar, DollarSign, Key, Radio, 
+  ShieldAlert, ShieldCheck, Users, Calendar, DollarSign, Key, Radio, 
   Search, CheckCircle2, AlertOctagon, RefreshCw, Send, 
   Lock, Settings, Sparkles, Filter, ChevronRight, Activity, Ban
 } from 'lucide-react';
@@ -16,11 +16,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   currentUser,
   onRefreshEvents,
 }) => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'events' | 'security' | 'broadcast'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'verification_queue' | 'users' | 'events' | 'security' | 'broadcast'>('overview');
   const [adminData, setAdminData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [searchUserQuery, setSearchUserQuery] = useState('');
   const [searchEventQuery, setSearchEventQuery] = useState('');
+  const [verificationQueue, setVerificationQueue] = useState<any[]>([]);
+  const [queueLoading, setQueueLoading] = useState(false);
 
   // Broadcast state
   const [broadcastTitle, setBroadcastTitle] = useState('');
@@ -34,6 +36,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       if (data.success) {
         setAdminData(data);
       }
+      const queueRes = await api.getAdminVerificationQueue();
+      if (queueRes.success) {
+        setVerificationQueue(queueRes.queue || []);
+      }
     } catch (err) {
       console.error('Failed to load admin overview', err);
     } finally {
@@ -46,6 +52,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const interval = setInterval(fetchOverview, 4000);
     return () => clearInterval(interval);
   }, []);
+
+  const handleResolveVerification = async (organizerId: string, action: 'approve' | 'reject') => {
+    try {
+      await api.resolveAdminVerification(organizerId, action);
+      fetchOverview();
+    } catch (err) {
+      alert('Failed to resolve verification');
+    }
+  };
 
   const handleRoleChange = async (userId: string, newRole: string) => {
     try {
@@ -138,6 +153,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
         {[
           { id: 'overview', label: 'Platform Telemetry', icon: Activity },
+          { id: 'verification_queue', label: `KYC Queue (${verificationQueue.length})`, icon: ShieldCheck },
           { id: 'users', label: `Users & Roles (${users.length})`, icon: Users },
           { id: 'events', label: `Global Events (${events.length})`, icon: Calendar },
           { id: 'security', label: `Security & Fraud (${platformMetrics.totalFraudAlerts})`, icon: ShieldAlert },
@@ -274,6 +290,77 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               ))}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* TAB: PLATFORM VERIFICATION REVIEW QUEUE (§D) */}
+      {activeTab === 'verification_queue' && (
+        <div className="glass-panel p-5 rounded-3xl border border-[#212638] space-y-4 animate-in fade-in duration-150">
+          <div>
+            <h3 className="font-display font-black text-lg text-white flex items-center gap-2">
+              <ShieldCheck className="w-5 h-5 text-[#00f0ff]" />
+              <span>Organizer Verification Review Queue</span>
+            </h3>
+            <p className="text-xs text-slate-400">Processor-flagged onboarding cases and KYC compliance management</p>
+          </div>
+
+          {verificationQueue.length > 0 ? (
+            <div className="space-y-3">
+              {verificationQueue.map((item: any) => (
+                <div key={item.user_id} className="p-4 rounded-2xl bg-[#141724] border border-[#202538] flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs">
+                  <div className="flex items-start gap-3">
+                    <img src={item.organizer_avatar || 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150'} alt={item.organization_name} className="w-11 h-11 rounded-2xl object-cover border border-[#26314a]" />
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-bold text-sm text-white">{item.organization_name}</h4>
+                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase border ${
+                          item.verification_status === 'flagged' 
+                            ? 'bg-rose-500/20 text-rose-300 border-rose-500/40' 
+                            : item.verification_status === 'pending'
+                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                            : 'bg-slate-500/20 text-slate-300 border-slate-500/40'
+                        }`}>
+                          {item.verification_status}
+                        </span>
+                        <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                          Tier {item.trust_tier}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-300 mt-1">
+                        Organizer: <span className="text-white font-semibold">{item.organizer_name}</span> ({item.organizer_email})
+                      </p>
+                      <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+                        Processor Ref: {item.payout_account_id || 'Not connected yet'} • Completed: {item.completed_events_count} gigs
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 self-end sm:self-center">
+                    <button
+                      onClick={() => handleResolveVerification(item.user_id, 'approve')}
+                      className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-[#00ff88] to-[#00f0ff] text-slate-950 font-black text-[11px] hover:opacity-90 transition shadow-md flex items-center gap-1"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Approve KYC</span>
+                    </button>
+                    <button
+                      onClick={() => handleResolveVerification(item.user_id, 'reject')}
+                      className="px-3.5 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-bold text-[11px] transition flex items-center gap-1"
+                    >
+                      <Ban className="w-3.5 h-3.5" />
+                      <span>Reject</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="p-8 text-center rounded-2xl bg-[#141724] border border-[#202538] text-xs text-slate-400">
+              <ShieldCheck className="w-8 h-8 text-emerald-400 mx-auto mb-2" />
+              <p className="font-bold text-white">Verification Queue Clean</p>
+              <p className="text-[11px] text-slate-400 mt-0.5">Zero processor-flagged edge cases awaiting manual review.</p>
+            </div>
+          )}
         </div>
       )}
 

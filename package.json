@@ -10,7 +10,17 @@
     "build": "npm run build --prefix server && npm run build --prefix client",
     "test": "npm run test --prefix server"
   },
-  "keywords": ["ticketing", "events", "geospatial", "cryptography", "ed25519", "resale"],
+  "keywords": [
+    "ticketing",
+    "events",
+    "geospatial",
+    "cryptography",
+    "ed25519",
+    "resale"
+  ],
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "devDependencies": {
+    "concurrently": "^10.0.5"
+  }
 }

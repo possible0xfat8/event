@@ -2,11 +2,25 @@ export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
+    password_hash TEXT,
     name TEXT NOT NULL,
+    phone TEXT,
     avatar TEXT,
-    role TEXT NOT NULL DEFAULT 'attendee', -- attendee | organizer | staff | admin
+    role TEXT NOT NULL DEFAULT 'attendee',
     notification_preferences TEXT DEFAULT '{"push": true, "email": true}',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS organizer_profiles (
+    user_id TEXT PRIMARY KEY,
+    organization_name TEXT NOT NULL,
+    verification_status TEXT NOT NULL DEFAULT 'unverified', -- unverified | pending | verified | rejected
+    payout_account_id TEXT, -- payment processor reference ID (e.g. acct_stripe_express_...)
+    trust_tier INTEGER NOT NULL DEFAULT 1, -- 1 = Tier 1 (New, 3-day hold, 250 cap), 2 = Tier 2 (1000 cap), 3 = Tier 3 (Unlimited)
+    completed_events_count INTEGER NOT NULL DEFAULT 0,
+    verified_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS friends (

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { EventItem, User, TicketItem } from '../types';
 import { api } from '../services/api';
 import confetti from 'canvas-confetti';
-import { X, CheckCircle2, AlertTriangle, CreditCard, Sparkles, ShieldCheck, ArrowRight, Loader2 } from 'lucide-react';
+import { X, CheckCircle2, AlertTriangle, CreditCard, Sparkles, ShieldCheck, ArrowRight, Loader2, UserCheck, Mail, Zap } from 'lucide-react';
 
 interface CheckoutModalProps {
   event: EventItem;
@@ -24,10 +24,19 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [status, setStatus] = useState<'idle' | 'processing' | 'optimistic_success' | 'confirmed' | 'sold_out_error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [issuedTickets, setIssuedTickets] = useState<TicketItem[]>([]);
+  const [isGuestMode, setIsGuestMode] = useState(false);
+  const [guestEmail, setGuestEmail] = useState('');
+  const [guestName, setGuestName] = useState('');
+  const [claimUrl, setClaimUrl] = useState<string | null>(null);
 
   const totalPrice = Number((event.price * quantity).toFixed(2));
 
   const handleExecutePurchase = async () => {
+    if (isGuestMode && !guestEmail.trim()) {
+      alert('Please enter your email for guest ticket delivery');
+      return;
+    }
+
     setStatus('processing');
     const idempotencyKey = `idem_${currentUser.id}_${event.id}_${Date.now()}`;
 
@@ -36,15 +45,29 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       if (status === 'processing') {
         setStatus('optimistic_success');
       }
-    }, 250);
+    }, 200);
 
     try {
-      const res = await api.purchaseTicket({
-        eventId: event.id,
-        buyerUserId: currentUser.id,
-        quantity,
-        idempotencyKey,
-      });
+      let res: any;
+      if (isGuestMode) {
+        res = await api.guestCheckout({
+          email: guestEmail.trim(),
+          name: guestName.trim() || undefined,
+          eventId: event.id,
+          quantity,
+          idempotencyKey,
+        });
+        if (res.claimAccountUrl) {
+          setClaimUrl(res.claimAccountUrl);
+        }
+      } else {
+        res = await api.purchaseTicket({
+          eventId: event.id,
+          buyerUserId: currentUser.id,
+          quantity,
+          idempotencyKey,
+        });
+      }
 
       if (res.success && res.tickets) {
         setIssuedTickets(res.tickets);
@@ -77,7 +100,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
         {/* State 1: Ready to Purchase */}
         {status === 'idle' && (
-          <div className="space-y-5">
+          <div className="space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-xl bg-pink-500/20 text-[#ff2d75] flex items-center justify-center">
@@ -89,6 +112,51 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                 <X className="w-5 h-5" />
               </button>
             </div>
+
+            {/* Guest Checkout Toggle (§A) */}
+            <div className="flex items-center justify-between p-2.5 rounded-2xl bg-[#141724] border border-[#202538] text-xs">
+              <span className="text-slate-300 font-semibold flex items-center gap-1.5">
+                <Zap className="w-3.5 h-3.5 text-[#00f0ff]" />
+                <span>Guest Checkout (No password needed)</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsGuestMode(!isGuestMode)}
+                className={`px-3 py-1 rounded-xl font-bold transition text-[11px] ${
+                  isGuestMode ? 'bg-[#00f0ff] text-black shadow-md' : 'bg-[#1c2236] text-slate-400 hover:text-white'
+                }`}
+              >
+                {isGuestMode ? 'Enabled' : 'Enable'}
+              </button>
+            </div>
+
+            {isGuestMode && (
+              <div className="p-3.5 rounded-2xl bg-[#161a29] border border-[#23293e] space-y-2.5 text-xs animate-in fade-in">
+                <div>
+                  <label className="text-slate-300 font-bold flex items-center gap-1">
+                    <Mail className="w-3 h-3 text-[#ff2d75]" /> Email for Ticket Delivery
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="e.g. yourname@gmail.com"
+                    value={guestEmail}
+                    onChange={e => setGuestEmail(e.target.value)}
+                    className="w-full mt-1 px-3 py-2 rounded-xl bg-[#10131e] border border-[#28324a] text-white focus:outline-none focus:border-[#ff2d75]"
+                  />
+                </div>
+                <div>
+                  <label className="text-slate-400 font-semibold">Your Name (Optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Alex"
+                    value={guestName}
+                    onChange={e => setGuestName(e.target.value)}
+                    className="w-full mt-1 px-3 py-2 rounded-xl bg-[#10131e] border border-[#28324a] text-white focus:outline-none focus:border-[#ff2d75]"
+                  />
+                </div>
+              </div>
+            )}
 
             {/* Order Summary Box */}
             <div className="p-4 rounded-2xl bg-[#161a29] border border-[#23293e] space-y-3">
@@ -141,7 +209,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           </div>
         )}
 
-        {/* State 2: Optimistic / In-Progress UI (evnt.pdf §7) */}
+        {/* State 2: Optimistic / In-Progress UI */}
         {(status === 'processing' || status === 'optimistic_success') && (
           <div className="py-8 text-center space-y-4">
             <div className="relative w-16 h-16 mx-auto flex items-center justify-center">
@@ -171,6 +239,18 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               </p>
             </div>
 
+            {isGuestMode && claimUrl && (
+              <div className="p-3.5 rounded-2xl bg-purple-500/10 border border-purple-500/30 text-left space-y-1.5">
+                <div className="flex items-center gap-1.5 text-purple-300 font-bold text-xs">
+                  <UserCheck className="w-4 h-4" />
+                  <span>Claim Your Free Account</span>
+                </div>
+                <p className="text-[11px] text-slate-300">
+                  Set a password anytime to manage tickets, enable peer-to-peer resale, or transfer to friends.
+                </p>
+              </div>
+            )}
+
             <button
               onClick={() => {
                 onSuccess(issuedTickets);
@@ -184,7 +264,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           </div>
         )}
 
-        {/* State 4: Honest Sold-Out Race Failure (evnt.pdf §7) */}
+        {/* State 4: Honest Sold-Out Race Failure */}
         {status === 'sold_out_error' && (
           <div className="py-5 text-center space-y-4">
             <div className="w-14 h-14 rounded-full bg-amber-500/20 text-amber-400 mx-auto flex items-center justify-center border border-amber-500/30">

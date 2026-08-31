@@ -1,11 +1,9 @@
 import React, { useState } from 'react';
 import { User, NotificationItem } from '../types';
-import { MapPin, Bell, Radio, Navigation, Compass } from 'lucide-react';
+import { MapPin, Bell, Radio, Navigation, Compass, LogOut } from 'lucide-react';
 
 interface HeaderProps {
   currentUser: User;
-  users: User[];
-  onSelectUser: (user: User) => void;
   selectedCity: { name: string; lat: number; lng: number; isLiveGps?: boolean };
   onSelectCity: (city: { name: string; lat: number; lng: number; isLiveGps?: boolean }) => void;
   onDetectLiveLocation: () => void;
@@ -13,6 +11,7 @@ interface HeaderProps {
   notifications: NotificationItem[];
   onOpenNotifications: () => void;
   networkStatus: 'online' | 'offline' | 'spotty';
+  onLogout: () => void;
 }
 
 const REGIONS = [
@@ -25,8 +24,6 @@ const REGIONS = [
 
 export const Header: React.FC<HeaderProps> = ({
   currentUser,
-  users,
-  onSelectUser,
   selectedCity,
   onSelectCity,
   onDetectLiveLocation,
@@ -34,9 +31,10 @@ export const Header: React.FC<HeaderProps> = ({
   notifications,
   onOpenNotifications,
   networkStatus,
+  onLogout,
 }) => {
-  const [showUserMenu, setShowUserMenu] = useState(false);
   const [showCityMenu, setShowCityMenu] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
@@ -119,7 +117,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Right: Network Status, Notifications, User Persona Switcher */}
+        {/* Right: Network Status, Notifications, User Info & Logout */}
         <div className="flex items-center gap-2">
           {/* Network Indicator */}
           <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#141724] border border-[#212638] text-[11px]">
@@ -149,7 +147,7 @@ export const Header: React.FC<HeaderProps> = ({
             )}
           </button>
 
-          {/* User Persona Switcher */}
+          {/* User Avatar + Logout */}
           <div className="relative z-[999]">
             <button
               onClick={() => setShowUserMenu(!showUserMenu)}
@@ -167,40 +165,32 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
 
             {showUserMenu && (
-              <div className="absolute right-0 mt-2 w-64 rounded-2xl bg-[#12141e] border border-[#2a3048] shadow-2xl p-2 z-[9999] animate-in fade-in zoom-in-95 duration-150">
-                <div className="px-3 py-2 border-b border-[#212638]">
-                  <p className="text-xs font-semibold text-white">{currentUser.name}</p>
-                  <p className="text-[10px] text-slate-400">{currentUser.email}</p>
-                  <div className="mt-1 flex items-center gap-1">
-                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-purple-500/20 text-purple-300">
-                      {currentUser.role} mode
+              <div className="absolute right-0 mt-2 w-64 rounded-2xl bg-[#12141e] border border-[#2a3048] shadow-2xl p-3 z-[9999] animate-in fade-in zoom-in-95 duration-150">
+                <div className="flex items-center gap-3 pb-3 border-b border-[#212638]">
+                  <img
+                    src={currentUser.avatar}
+                    alt={currentUser.name}
+                    className="w-10 h-10 rounded-full object-cover border-2 border-[#ff2d75]/40"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-white truncate">{currentUser.name}</p>
+                    <p className="text-[10px] text-slate-400 truncate">{currentUser.email}</p>
+                    <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-purple-500/20 text-purple-300">
+                      {currentUser.role}
                     </span>
                   </div>
                 </div>
 
-                <div className="py-1">
-                  <div className="text-[10px] uppercase font-bold text-slate-500 px-3 py-1">Switch Persona</div>
-                  {users.map(u => (
-                    <button
-                      key={u.id}
-                      onClick={() => {
-                        onSelectUser(u);
-                        setShowUserMenu(false);
-                      }}
-                      className={`w-full text-left px-3 py-2 rounded-xl text-xs transition flex items-center gap-2.5 ${
-                        currentUser.id === u.id
-                          ? 'bg-[#ff2d75]/15 text-[#ff2d75] font-semibold'
-                          : 'text-slate-300 hover:bg-[#1a1e30]'
-                      }`}
-                    >
-                      <img src={u.avatar} alt={u.name} className="w-6 h-6 rounded-full object-cover" />
-                      <div className="flex-1 min-w-0">
-                        <div className="truncate font-medium">{u.name}</div>
-                        <div className="text-[10px] text-slate-400 capitalize">{u.role}</div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
+                <button
+                  onClick={() => {
+                    setShowUserMenu(false);
+                    onLogout();
+                  }}
+                  className="w-full mt-2 flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-rose-400 hover:bg-rose-500/10 transition"
+                >
+                  <LogOut className="w-4 h-4" />
+                  Sign Out
+                </button>
               </div>
             )}
           </div>

@@ -135,12 +135,21 @@ class InventoryService {
       )
     `);
 
+    // Check organizer verification status for published events
+    let initialStatus = data.status || 'published';
+    if (initialStatus === 'published' && data.organizer_id) {
+      const orgProfile = db.prepare('SELECT verification_status FROM organizer_profiles WHERE user_id = ?').get(data.organizer_id) as any;
+      if (orgProfile && orgProfile.verification_status !== 'verified') {
+        initialStatus = 'draft';
+      }
+    }
+
     stmt.run(
-      id, data.organizer_id, data.title, data.description, data.lat, data.lng,
+      id, data.organizer_id, data.title, data.description || '', data.lat, data.lng,
       data.venue_name, data.venue_address, data.start_time, data.end_time,
       data.category, data.capacity, data.capacity, data.price,
       data.resale_allowed ?? 1, data.resale_price_cap ?? 1.20,
-      data.status || 'published', data.image_url, data.vibe_tags || '[]'
+      initialStatus, data.image_url || null, data.vibe_tags || '[]'
     );
 
     return this.getEventById(id)!;
