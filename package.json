@@ -1,0 +1,16 @@
+{
+  "name": "event-verified-ticketing",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Location-based event discovery and cryptographically verified ticketing app",
+  "scripts": {
+    "dev": "concurrently \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
+    "server:dev": "npm run dev --prefix server",
+    "client:dev": "npm run dev --prefix client",
+    "build": "npm run build --prefix server && npm run build --prefix client",
+    "test": "npm run test --prefix server"
+  },
+  "keywords": ["ticketing", "events", "geospatial", "cryptography", "ed25519", "resale"],
+  "author": "",
+  "license": "ISC"
+}
