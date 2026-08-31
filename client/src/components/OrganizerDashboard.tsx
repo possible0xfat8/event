@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { User, EventItem, FraudAlertLog } from '../types';
 import { api } from '../services/api';
-import { BarChart3, TrendingUp, Users, DollarSign, AlertOctagon, RotateCcw, Plus, CheckCircle, ShieldAlert, Sparkles, MapPin } from 'lucide-react';
+import { 
+  BarChart3, TrendingUp, Users, DollarSign, AlertOctagon, 
+  RotateCcw, Plus, CheckCircle, ShieldAlert, Sparkles, 
+  MapPin, Lock, ShieldCheck 
+} from 'lucide-react';
 
 interface OrganizerDashboardProps {
   currentUser: User;
@@ -33,6 +37,9 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
   const [newEventImageUrl, setNewEventImageUrl] = useState('https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=800');
   const [createLoading, setCreateLoading] = useState(false);
 
+  const isAdminOrOrganizer = currentUser.role === 'admin' || currentUser.role === 'organizer';
+  const isStaff = currentUser.role === 'staff';
+
   const fetchAnalytics = async () => {
     try {
       const data = await api.getOrganizerAnalytics(currentUser.id);
@@ -53,6 +60,7 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
   }, [currentUser.id]);
 
   const handleRefund = async () => {
+    if (!isAdminOrOrganizer) return;
     if (!refundTicketId.trim()) return;
     setRefundLoading(true);
     setRefundMsg(null);
@@ -75,6 +83,7 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
 
   const handleCreateEvent = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isAdminOrOrganizer) return;
     setCreateLoading(true);
     try {
       const now = new Date();
@@ -118,38 +127,66 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
   const { summary, events, recentScans, fraudAlerts } = analytics;
 
   return (
-    <div className="max-w-4xl mx-auto p-4 pb-24 space-y-6">
+    <div className="max-w-4xl mx-auto p-4 pb-28 space-y-5">
       {/* Top Header */}
       <div className="flex items-center justify-between">
         <div>
           <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-[#ff2d75] animate-pulse" />
-            <h2 className="font-display font-black text-2xl text-white">Organizer Mission Control</h2>
+            <h2 className="font-display font-black text-xl sm:text-2xl text-white">
+              {isStaff ? 'Venue Gate Operations' : 'Organizer Mission Control'}
+            </h2>
           </div>
-          <p className="text-xs text-slate-400">Real-Time Sales & Gate Telemetry</p>
+          <p className="text-xs text-slate-400">
+            {isStaff ? 'Staff Gate Velocity & Monitoring' : 'Real-Time Sales & Gate Telemetry'}
+          </p>
         </div>
 
-        <button
-          onClick={() => setShowCreateModal(true)}
-          className="px-4 py-2 rounded-2xl bg-gradient-to-r from-[#ff2d75] to-[#9d4edd] text-white text-xs font-bold hover:opacity-90 transition shadow-xl shadow-pink-500/20 flex items-center gap-1.5"
-        >
-          <Plus className="w-4 h-4" />
-          <span>New Event</span>
-        </button>
+        {/* Create Event Button (Visible ONLY to Organizer / Admin) */}
+        {isAdminOrOrganizer ? (
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="px-4 py-2 rounded-2xl bg-gradient-to-r from-[#ff2d75] to-[#9d4edd] text-white text-xs font-bold hover:opacity-90 active:scale-95 transition shadow-xl shadow-pink-500/20 flex items-center gap-1.5"
+          >
+            <Plus className="w-4 h-4" />
+            <span>New Event</span>
+          </button>
+        ) : (
+          <div className="px-3 py-1.5 rounded-full bg-[#181d2f] border border-[#2c3652] text-[10px] font-bold text-slate-400 flex items-center gap-1">
+            <ShieldCheck className="w-3.5 h-3.5 text-[#00ff88]" />
+            <span>Staff Mode (Read Only)</span>
+          </div>
+        )}
       </div>
 
       {/* KPI Cards Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="glass-panel p-4 rounded-3xl border border-[#212638]">
+        {/* Gross Revenue Card: HIDDEN / LOCKED for Staff */}
+        <div className="glass-panel p-3.5 sm:p-4 rounded-3xl border border-[#212638] relative overflow-hidden">
           <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
             <span>Gross Revenue</span>
-            <DollarSign className="w-4 h-4 text-[#00ff88]" />
+            {isAdminOrOrganizer ? (
+              <DollarSign className="w-4 h-4 text-[#00ff88]" />
+            ) : (
+              <Lock className="w-4 h-4 text-amber-400" />
+            )}
           </div>
-          <div className="font-display font-black text-2xl text-white">${summary.totalRevenue.toFixed(2)}</div>
-          <div className="text-[10px] text-emerald-400 font-semibold mt-1">Instant settlements</div>
+
+          {isAdminOrOrganizer ? (
+            <>
+              <div className="font-display font-black text-2xl text-white">${summary.totalRevenue.toFixed(2)}</div>
+              <div className="text-[10px] text-emerald-400 font-semibold mt-1">Instant settlements</div>
+            </>
+          ) : (
+            <>
+              <div className="font-display font-black text-xl text-slate-500 tracking-wider">••••••••</div>
+              <div className="text-[10px] text-amber-400 font-semibold mt-1">Admin / Organizer Only</div>
+            </>
+          )}
         </div>
 
-        <div className="glass-panel p-4 rounded-3xl border border-[#212638]">
+        {/* Tickets Sold */}
+        <div className="glass-panel p-3.5 sm:p-4 rounded-3xl border border-[#212638]">
           <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
             <span>Tickets Sold</span>
             <TrendingUp className="w-4 h-4 text-[#00f0ff]" />
@@ -158,7 +195,8 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
           <div className="text-[10px] text-slate-400 mt-1">Across {events.length} listings</div>
         </div>
 
-        <div className="glass-panel p-4 rounded-3xl border border-[#212638]">
+        {/* Admitted at Gate */}
+        <div className="glass-panel p-3.5 sm:p-4 rounded-3xl border border-[#212638]">
           <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
             <span>Admitted at Gate</span>
             <Users className="w-4 h-4 text-[#9d4edd]" />
@@ -167,7 +205,8 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
           <div className="text-[10px] text-purple-300 font-semibold mt-1">{summary.admissionRatePercent}% check-in rate</div>
         </div>
 
-        <div className="glass-panel p-4 rounded-3xl border border-[#212638]">
+        {/* Line Speed */}
+        <div className="glass-panel p-3.5 sm:p-4 rounded-3xl border border-[#212638]">
           <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
             <span>Line Speed</span>
             <Sparkles className="w-4 h-4 text-amber-400" />
@@ -177,13 +216,13 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
         </div>
       </div>
 
-      {/* Security Alert Feed: Flagged Duplicate / Fraud Scans (§6) */}
+      {/* Security Alert Feed: Flagged Duplicate / Fraud Scans */}
       {fraudAlerts && fraudAlerts.length > 0 && (
-        <div className="glass-panel-glow p-5 rounded-3xl border border-rose-500/40 space-y-3 bg-rose-950/20">
+        <div className="glass-panel-glow p-4 sm:p-5 rounded-3xl border border-rose-500/40 space-y-3 bg-rose-950/20">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <ShieldAlert className="w-5 h-5 text-rose-500 animate-bounce" />
-              <h3 className="font-display font-black text-base text-white uppercase tracking-wider">
+              <h3 className="font-display font-black text-sm sm:text-base text-white uppercase tracking-wider">
                 Flagged Duplicate Scan Alerts ({fraudAlerts.length})
               </h3>
             </div>
@@ -193,7 +232,7 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
           </div>
 
           <p className="text-xs text-slate-300">
-            The following tickets were scanned more than once across doors/offline handhelds. Review timestamps and notify gate security:
+            The following passes were scanned more than once across gates. Flagged for fraud containment:
           </p>
 
           <div className="space-y-2">
@@ -222,9 +261,9 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
       )}
 
       {/* Real-time Gate Velocity & Line Speed Gauge */}
-      <div className="glass-panel p-5 rounded-3xl border border-[#212638] space-y-4">
+      <div className="glass-panel p-4 sm:p-5 rounded-3xl border border-[#212638] space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="font-display font-black text-base text-white">Live Gate Velocity & Line Flow</h3>
+          <h3 className="font-display font-black text-sm sm:text-base text-white">Live Gate Velocity & Line Flow</h3>
           <span className="text-xs text-slate-400">{recentScans.length} verified door entries</span>
         </div>
 
@@ -244,47 +283,49 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
         </div>
       </div>
 
-      {/* One-Tap Refund & Ticket Revocation Tool (§10.4) */}
-      <div className="glass-panel p-5 rounded-3xl border border-[#212638] space-y-3">
-        <div className="flex items-center gap-2">
-          <RotateCcw className="w-4 h-4 text-[#ff2d75]" />
-          <h3 className="font-display font-black text-base text-white">Instant 1-Tap Customer Refund</h3>
-        </div>
-        <p className="text-xs text-slate-400">
-          Instantly revokes ticket cryptographic signature, returns inventory to event, and processes automatic payment refund.
-        </p>
-
-        <div className="flex gap-2">
-          <input
-            type="text"
-            placeholder="Enter Ticket ID (e.g. tkt_sarah_bushwick_001)..."
-            value={refundTicketId}
-            onChange={e => setRefundTicketId(e.target.value)}
-            className="flex-1 px-3 py-2.5 rounded-2xl bg-[#141724] border border-[#212638] text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#ff2d75]"
-          />
-          <button
-            onClick={handleRefund}
-            disabled={refundLoading || !refundTicketId.trim()}
-            className="px-5 py-2.5 rounded-2xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs transition disabled:opacity-40 shadow-lg shadow-rose-600/20"
-          >
-            {refundLoading ? 'Revoking...' : 'Refund & Revoke'}
-          </button>
-        </div>
-
-        {refundMsg && (
-          <div className="p-3 rounded-xl bg-[#141724] border border-[#2a3048] text-xs text-slate-200">
-            {refundMsg}
+      {/* One-Tap Refund & Ticket Revocation Tool (Restricted to Admin / Organizer) */}
+      {isAdminOrOrganizer && (
+        <div className="glass-panel p-4 sm:p-5 rounded-3xl border border-[#212638] space-y-3">
+          <div className="flex items-center gap-2">
+            <RotateCcw className="w-4 h-4 text-[#ff2d75]" />
+            <h3 className="font-display font-black text-sm sm:text-base text-white">Instant 1-Tap Customer Refund</h3>
           </div>
-        )}
-      </div>
+          <p className="text-xs text-slate-400">
+            Instantly revokes ticket cryptographic signature, returns inventory to event, and processes automatic payment refund.
+          </p>
+
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              type="text"
+              placeholder="Enter Ticket ID (e.g. tkt_sarah_bushwick_001)..."
+              value={refundTicketId}
+              onChange={e => setRefundTicketId(e.target.value)}
+              className="flex-1 px-3 py-2.5 rounded-2xl bg-[#141724] border border-[#212638] text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#ff2d75]"
+            />
+            <button
+              onClick={handleRefund}
+              disabled={refundLoading || !refundTicketId.trim()}
+              className="px-5 py-2.5 rounded-2xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs transition disabled:opacity-40 shadow-lg shadow-rose-600/20"
+            >
+              {refundLoading ? 'Revoking...' : 'Refund & Revoke'}
+            </button>
+          </div>
+
+          {refundMsg && (
+            <div className="p-3 rounded-xl bg-[#141724] border border-[#2a3048] text-xs text-slate-200">
+              {refundMsg}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Modal: Create Event */}
-      {showCreateModal && (
+      {showCreateModal && isAdminOrOrganizer && (
         <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-150">
-          <div className="relative w-full max-w-lg bg-[#10131e] border border-[#262c42] rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto z-[100000]">
+          <div className="relative w-full max-w-lg bg-[#10131e] border border-[#262c42] rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto z-[100000]">
             <h3 className="font-display font-black text-xl text-white">Create Verified Event</h3>
 
-            <form onSubmit={handleCreateEvent} className="space-y-3.5 text-xs">
+            <form onSubmit={handleCreateEvent} className="space-y-3 text-xs">
               <div>
                 <label className="text-slate-300 font-bold">Event Title</label>
                 <input
@@ -308,7 +349,7 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <div>
                   <label className="text-slate-300 font-bold">Venue Name</label>
                   <input
@@ -333,7 +374,7 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-3 gap-2">
                 <div>
                   <label className="text-slate-300 font-bold">Category</label>
                   <select
@@ -370,7 +411,7 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="text-slate-300 font-bold">Latitude</label>
                   <input

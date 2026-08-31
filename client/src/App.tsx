@@ -73,13 +73,24 @@ export const App: React.FC = () => {
     detectLiveLocation();
 
     api.getUsers().then(allUsers => {
-      if (allUsers.length > 0) {
-        setUsers(allUsers);
-        const alex = allUsers.find(u => u.id === 'usr_alex') || allUsers[0];
+      // Filter out auto-generated test runner buyers so only real personas appear in UI
+      const realPersonas = allUsers.filter(u => !u.id.startsWith('usr_buyer_concurrency_'));
+      if (realPersonas.length > 0) {
+        setUsers(realPersonas);
+        const alex = realPersonas.find(u => u.id === 'usr_alex') || realPersonas[0];
         setCurrentUser(alex);
       }
     });
   }, []);
+
+  // Strict RBAC Redirection: If current user is attendee, prevent access to scanner or organizer tabs
+  useEffect(() => {
+    if (currentUser?.role === 'attendee') {
+      if (activeTab === 'scanner' || activeTab === 'organizer') {
+        setActiveTab('explore');
+      }
+    }
+  }, [currentUser, activeTab]);
 
   // Fetch Events when city, filters, or currentUser changes
   const fetchEvents = () => {
@@ -120,7 +131,7 @@ export const App: React.FC = () => {
     setCurrentUser(newUser);
     if (newUser.role === 'staff') {
       setActiveTab('scanner');
-    } else if (newUser.role === 'organizer') {
+    } else if (newUser.role === 'organizer' || newUser.role === 'admin') {
       setActiveTab('organizer');
     } else {
       setActiveTab('explore');
@@ -160,7 +171,7 @@ export const App: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[#090a0f] text-slate-100 flex flex-col selection:bg-[#ff2d75] selection:text-white">
+    <div className="min-h-screen bg-[#090a0f] text-slate-100 flex flex-col selection:bg-[#ff2d75] selection:text-white max-w-full overflow-x-hidden">
       {/* Top Application Header with Live GPS toggle */}
       <Header
         currentUser={currentUser}
@@ -212,17 +223,17 @@ export const App: React.FC = () => {
           />
         )}
 
-        {activeTab === 'organizer' && (
+        {activeTab === 'organizer' && (currentUser.role === 'organizer' || currentUser.role === 'admin' || currentUser.role === 'staff') && (
           <OrganizerDashboard
             currentUser={currentUser}
             onRefreshEvents={fetchEvents}
           />
         )}
 
-        {activeTab === 'scanner' && (
+        {activeTab === 'scanner' && (currentUser.role === 'staff' || currentUser.role === 'organizer' || currentUser.role === 'admin') && (
           <ScannerMode
             events={events}
-            scannerDeviceId={currentUser.role === 'staff' ? `scanner_${currentUser.name.toLowerCase().replace(/[^a-z0-9]/g, '_')}` : 'scanner_handheld_gate_1'}
+            scannerDeviceId={currentUser.role === 'staff' ? `gate_scanner_${currentUser.name.toLowerCase().replace(/[^a-z0-9]/g, '_')}` : 'admin_handheld_gate_1'}
             networkStatus={networkStatus}
             onToggleNetworkStatus={setNetworkStatus}
           />

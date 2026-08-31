@@ -1,9 +1,11 @@
+export type UserRole = 'attendee' | 'staff' | 'organizer' | 'admin';
+
 export interface User {
   id: string;
   email: string;
   name: string;
   avatar: string;
-  role: 'attendee' | 'organizer' | 'staff';
+  role: UserRole;
 }
 
 export interface EventItem {

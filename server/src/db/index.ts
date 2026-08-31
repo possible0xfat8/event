@@ -52,7 +52,7 @@ export function initDatabase(dbPath?: string): DBWrapper {
   // Load schema from bundled constant
   db.exec(SCHEMA_SQL);
 
-  // Seed sample data if empty
+  // Seed sample data if empty or upgrade users
   seedInitialData(db);
 
   return db;
@@ -61,15 +61,23 @@ export function initDatabase(dbPath?: string): DBWrapper {
 export function seedInitialData(db: DBWrapper) {
   const userCountRow = db.prepare('SELECT COUNT(*) as count FROM users').get() as any;
   if (userCountRow && userCountRow.count > 0) {
-    // Check if Nigeria events are already present; if not, add them
-    const lagosEvent = db.prepare(`SELECT id FROM events WHERE id = 'evt_obis_house_lagos'`).get();
-    if (!lagosEvent) {
-      seedNigeriaAndGlobalEvents(db);
-    }
+    // If users already exist, ensure roles are aligned
+    try {
+      db.exec(`UPDATE users SET role = 'attendee' WHERE id IN ('usr_alex', 'usr_sarah', 'usr_marcus');`);
+      db.exec(`UPDATE users SET role = 'staff' WHERE id IN ('usr_scanner_dave', 'usr_staff_dave');`);
+      db.exec(`UPDATE users SET role = 'organizer' WHERE id = 'usr_organizer_maya';`);
+      db.exec(`UPDATE users SET role = 'admin' WHERE id = 'usr_admin_elena';`);
+      
+      // Ensure super admin user exists
+      db.exec(`
+        INSERT OR IGNORE INTO users (id, email, name, avatar, role)
+        VALUES ('usr_admin_elena', 'elena.admin@evnt.live', 'Elena Vance (Super Admin)', 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150', 'admin');
+      `);
+    } catch (_) {}
     return;
   }
 
-  // Insert Users
+  // 1. Insert Users first
   const insertUser = db.prepare(`
     INSERT INTO users (id, email, name, avatar, role)
     VALUES (?, ?, ?, ?, ?)
@@ -78,17 +86,20 @@ export function seedInitialData(db: DBWrapper) {
   const users = [
     { id: 'usr_alex', email: 'alex@evnt.live', name: 'Alex Rivera', avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150', role: 'attendee' },
     { id: 'usr_sarah', email: 'sarah@evnt.live', name: 'Sarah Chen', avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150', role: 'attendee' },
-    { id: 'usr_marcus', email: 'marcus@evnt.live', name: 'Marcus Vance', avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150', role: 'attendee' },
-    { id: 'usr_elena', email: 'elena@evnt.live', name: 'Elena Rostova', avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150', role: 'attendee' },
-    { id: 'usr_organizer_maya', email: 'maya@subterranean.events', name: 'Maya Lin (Subterranean Audio)', avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150', role: 'organizer' },
-    { id: 'usr_scanner_dave', email: 'dave@security.evnt', name: 'Dave (Door Staff - Gate 1)', avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150', role: 'staff' },
+    { id: 'usr_marcus', email: 'marcus@evnt.live', name: 'Marcus Adebayo (Lagos)', avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150', role: 'attendee' },
+    { id: 'usr_staff_dave', email: 'dave@security.evnt', name: 'Dave (Door Staff - Gate 1)', avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150', role: 'staff' },
+    { id: 'usr_organizer_maya', email: 'maya@subterranean.events', name: 'Maya Lin (Event Organizer)', avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150', role: 'organizer' },
+    { id: 'usr_admin_elena', email: 'elena.admin@evnt.live', name: 'Elena Vance (Super Admin)', avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150', role: 'admin' },
   ];
 
   for (const u of users) {
     insertUser.run(u.id, u.email, u.name, u.avatar, u.role);
   }
 
-  // Insert Friendships
+  // 2. Insert Events
+  seedNigeriaAndGlobalEvents(db);
+
+  // 3. Insert Friendships
   const insertFriend = db.prepare(`INSERT OR IGNORE INTO friends (user_id, friend_id) VALUES (?, ?)`);
   insertFriend.run('usr_alex', 'usr_sarah');
   insertFriend.run('usr_sarah', 'usr_alex');
@@ -97,9 +108,7 @@ export function seedInitialData(db: DBWrapper) {
   insertFriend.run('usr_sarah', 'usr_marcus');
   insertFriend.run('usr_marcus', 'usr_sarah');
 
-  seedNigeriaAndGlobalEvents(db);
-
-  // Pre-seed an order and valid ticket for Sarah and Marcus
+  // 4. Pre-seed orders and valid tickets
   const insertOrder = db.prepare(`
     INSERT INTO orders (id, buyer_user_id, event_id, quantity, total_amount, payment_intent_id, idempotency_key, status)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -115,24 +124,25 @@ export function seedInitialData(db: DBWrapper) {
   insertOrder.run('ord_sarah_001', 'usr_sarah', 'evt_boiler_room_bushwick', 1, 25.00, 'pi_mock_sarah_001', 'idem_sarah_001', 'confirmed');
   insertTicket.run(sarahTicketId, 'evt_boiler_room_bushwick', 'usr_sarah', 'ord_sarah_001', 'valid', sarahToken);
 
-  // Marcus has a ticket to Subterranean Bushwick
-  const marcusTicketId = 'tkt_marcus_bushwick_002';
-  const marcusToken = cryptoService.signTicket(marcusTicketId, 'evt_boiler_room_bushwick', 'usr_marcus');
-  insertOrder.run('ord_marcus_002', 'usr_marcus', 'evt_boiler_room_bushwick', 1, 25.00, 'pi_mock_marcus_002', 'idem_marcus_002', 'confirmed');
-  insertTicket.run(marcusTicketId, 'evt_boiler_room_bushwick', 'usr_marcus', 'ord_marcus_002', 'valid', marcusToken);
+  // Marcus has a ticket to Obi's House Lagos
+  const marcusTicketId = 'tkt_marcus_lagos_002';
+  const marcusToken = cryptoService.signTicket(marcusTicketId, 'evt_obis_house_lagos', 'usr_marcus');
+  insertOrder.run('ord_marcus_002', 'usr_marcus', 'evt_obis_house_lagos', 1, 15.00, 'pi_mock_marcus_002', 'idem_marcus_002', 'confirmed');
+  insertTicket.run(marcusTicketId, 'evt_obis_house_lagos', 'usr_marcus', 'ord_marcus_002', 'valid', marcusToken);
 
-  // Social "Going" Seeds:
-  const insertGoing = db.prepare(`INSERT OR REPLACE INTO going (user_id, event_id, visibility) VALUES (?, ?, ?)`);
+  // 5. Social "Going" Seeds
+  const insertGoing = db.prepare(`
+    INSERT INTO going (user_id, event_id, visibility)
+    VALUES (?, ?, ?)
+  `);
   insertGoing.run('usr_sarah', 'evt_boiler_room_bushwick', 'friends_only');
-  insertGoing.run('usr_marcus', 'evt_boiler_room_bushwick', 'public');
-  insertGoing.run('usr_elena', 'evt_boiler_room_bushwick', 'private');
-  insertGoing.run('usr_sarah', 'evt_obis_house_lagos', 'friends_only');
   insertGoing.run('usr_marcus', 'evt_obis_house_lagos', 'public');
+  insertGoing.run('usr_sarah', 'evt_obis_house_lagos', 'friends_only');
 }
 
 function seedNigeriaAndGlobalEvents(db: DBWrapper) {
   const insertEvent = db.prepare(`
-    INSERT OR REPLACE INTO events (
+    INSERT INTO events (
       id, organizer_id, title, description, lat, lng, venue_name, venue_address,
       start_time, end_time, category, capacity, tickets_remaining, price,
       resale_allowed, resale_price_cap, status, image_url, vibe_tags
@@ -220,7 +230,7 @@ function seedNigeriaAndGlobalEvents(db: DBWrapper) {
       id: 'evt_fela_shrine_experience',
       organizer_id: 'usr_organizer_maya',
       title: 'Afrika Shrine Live: Afrobeat Heritage & Brass Session',
-      description: 'Legendary live Afrobeat celebration with massive horn sections, hypnotic bass rhythms, and conscious music in the heart of Ikeja.',
+      description: 'Legendary live Afrobeat celebration with massive horn sections, hypnotic brass rhythms, and conscious music in the heart of Ikeja.',
       lat: 6.5956,
       lng: 3.3558,
       venue_name: 'New Afrika Shrine',
