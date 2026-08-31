@@ -1,8 +1,8 @@
 import React from 'react';
-import { Compass, Ticket, Users, BarChart3, ScanLine } from 'lucide-react';
+import { Compass, Ticket, Users, BarChart3, ScanLine, ShieldCheck } from 'lucide-react';
 import { UserRole } from '../types';
 
-export type ActiveTab = 'explore' | 'wallet' | 'social' | 'organizer' | 'scanner';
+export type ActiveTab = 'explore' | 'wallet' | 'social' | 'organizer' | 'scanner' | 'admin';
 
 interface NavigationProps {
   activeTab: ActiveTab;
@@ -39,9 +39,14 @@ export const Navigation: React.FC<NavigationProps> = ({
     // Staff sees Scanner first + Live gate operations
     navItems.push({ id: 'scanner', label: 'Door Scan', icon: ScanLine, highlight: true });
     navItems.push({ id: 'organizer', label: 'Live Gate', icon: BarChart3 });
-  } else if (userRole === 'organizer' || userRole === 'admin') {
-    // Organizers and Admins see full suite
+  } else if (userRole === 'organizer') {
+    // Organizers see Organizer mission control + Scanner
     navItems.push({ id: 'organizer', label: 'Organizer', icon: BarChart3, highlight: true });
+    navItems.push({ id: 'scanner', label: 'Scanner', icon: ScanLine });
+  } else if (userRole === 'admin') {
+    // Super Admins see Admin Control + Organizer + Scanner
+    navItems.push({ id: 'admin', label: 'Admin', icon: ShieldCheck, highlight: true });
+    navItems.push({ id: 'organizer', label: 'Organizer', icon: BarChart3 });
     navItems.push({ id: 'scanner', label: 'Scanner', icon: ScanLine });
   }
 
@@ -56,7 +61,7 @@ export const Navigation: React.FC<NavigationProps> = ({
             <button
               key={item.id}
               onClick={() => onTabChange(item.id)}
-              className={`relative flex flex-col items-center justify-center py-1 px-3.5 rounded-2xl transition-all duration-200 active:scale-95 ${
+              className={`relative flex flex-col items-center justify-center py-1 px-3 rounded-2xl transition-all duration-200 active:scale-95 ${
                 isActive
                   ? 'text-[#ff2d75] scale-105'
                   : 'text-slate-400 hover:text-slate-200'

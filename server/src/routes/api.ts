@@ -12,7 +12,7 @@ import { notificationsService } from '../services/notificationsService.js';
 export const apiRouter = Router();
 
 // ==========================================
-// 1. Users & Identity (Switching for demo)
+// 1. Users & Identity
 // ==========================================
 apiRouter.get('/users', (_req: Request, res: Response) => {
   const users = db.prepare(`SELECT * FROM users ORDER BY name ASC`).all();
@@ -115,93 +115,110 @@ apiRouter.post('/events', (req: Request, res: Response) => {
   }
 });
 
-apiRouter.post('/events/:id/reviews', (req: Request, res: Response) => {
-  const id = String(req.params.id);
-  const { userId, reaction, comment, photoUrl } = req.body;
-  const result = socialService.addPostEventReview(id, userId, reaction, comment, photoUrl);
-  res.json({ success: true, id: result.id });
-});
-
 // ==========================================
-// 3. Purchase & Orders & Waitlist
+// 3. Purchase & Reservation Flow
 // ==========================================
-apiRouter.post('/orders/purchase', (req: Request, res: Response) => {
+const handlePurchase = (req: Request, res: Response) => {
   const { eventId, buyerUserId, quantity, idempotencyKey, simulateIssuanceFailure } = req.body;
+
+  if (!eventId || !buyerUserId || !quantity || !idempotencyKey) {
+    return res.status(400).json({ success: false, error: 'Missing required purchase parameters' });
+  }
 
   const result = paymentsService.purchaseTickets({
     eventId,
     buyerUserId,
-    quantity: Number(quantity || 1),
+    quantity: Number(quantity),
     idempotencyKey,
     simulateIssuanceFailure: Boolean(simulateIssuanceFailure),
   });
 
   if (!result.success) {
-    const statusCode = result.isSoldOut ? 409 : 400;
-    return res.status(statusCode).json(result);
+    if (result.isSoldOut) {
+      return res.status(409).json(result); // 409 Conflict / Sold out
+    }
+    return res.status(400).json(result); // 400 Failed with compensation
+  }
+
+  res.status(200).json(result);
+};
+
+apiRouter.post('/orders/purchase', handlePurchase);
+apiRouter.post('/checkout', handlePurchase);
+
+// ==========================================
+// 4. Waitlist Queue
+// ==========================================
+apiRouter.post('/events/:id/waitlist', (req: Request, res: Response) => {
+  const eventId = String(req.params.id);
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ success: false, error: 'userId is required' });
+
+  const result = inventoryService.joinWaitlist(eventId, userId);
+  res.json(result);
+});
+
+// ==========================================
+// 5. Verification & Gate Scanning
+// ==========================================
+apiRouter.get('/verify/public-key', (_req: Request, res: Response) => {
+  const info = cryptoService.getPublicKeyInfo();
+  res.json({
+    success: true,
+    pem: info.pem,
+    rawBase64: info.rawBase64,
+  });
+});
+
+apiRouter.post('/verify/scan', (req: Request, res: Response) => {
+  const token = req.body.token || req.body.signedToken;
+  const scannerDeviceId = req.body.scannerDeviceId || 'scanner_handheld_default';
+  const targetEventId = req.body.targetEventId || req.body.gateEventId;
+
+  if (!token) return res.status(400).json({ valid: false, error: 'token or signedToken required' });
+
+  const result = verificationService.verifyOnline({
+    token,
+    scannerDeviceId,
+    targetEventId,
+  });
+
+  if (!result.valid) {
+    if (result.status === 'already_used') {
+      return res.status(409).json(result);
+    }
+    return res.status(400).json(result);
   }
 
   res.status(200).json(result);
 });
 
-apiRouter.post('/events/:id/waitlist', (req: Request, res: Response) => {
-  const id = String(req.params.id);
-  const { userId } = req.body;
-  const result = inventoryService.joinWaitlist(id, userId);
-  res.json(result);
-});
-
-// ==========================================
-// 4. Cryptographic Verification & Staff Gates
-// ==========================================
-apiRouter.get('/verify/public-key', (_req: Request, res: Response) => {
-  res.json({ success: true, ...cryptoService.getPublicKeyInfo() });
-});
-
-apiRouter.post('/verify/scan', (req: Request, res: Response) => {
-  const { token, scannerDeviceId, targetEventId } = req.body;
-  const result = verificationService.verifyOnline({
-    token,
-    scannerDeviceId: scannerDeviceId || 'gate_online_scanner_1',
-    targetEventId,
-  });
-
-  if (!result.valid) {
-    const statusCode = result.status === 'already_used' ? 409 : 400;
-    return res.status(statusCode).json(result);
-  }
-
-  res.json(result);
-});
-
 apiRouter.get('/verify/manifest/:eventId', (req: Request, res: Response) => {
   const eventId = String(req.params.eventId);
   const manifest = verificationService.getEventManifestForOfflineScanner(eventId);
-  if (!manifest) return res.status(404).json({ success: false, error: 'Event not found' });
+  if (!manifest) return res.status(404).json({ success: false, error: 'Event not found for manifest' });
   res.json({ success: true, manifest });
 });
 
 apiRouter.post('/verify/sync-offline', (req: Request, res: Response) => {
-  const { scans } = req.body;
+  const scans = req.body.scans || req.body.offlineScans;
   if (!Array.isArray(scans)) {
-    return res.status(400).json({ success: false, error: 'Expected scans array' });
+    return res.status(400).json({ success: false, error: 'scans array expected' });
   }
 
-  const result = verificationService.syncOfflineScans(scans);
-  res.json({ success: true, ...result });
-});
-
-apiRouter.get('/verify/fraud-logs', (req: Request, res: Response) => {
-  const eventId = req.query.eventId as string | undefined;
-  const logs = verificationService.getFraudAuditLog(eventId);
-  res.json({ success: true, logs });
+  const summary = verificationService.syncOfflineScans(scans);
+  res.json({ success: true, ...summary });
 });
 
 // ==========================================
-// 5. Peer-to-Peer Resale
+// 6. Verified P2P Resale Transfers
 // ==========================================
 apiRouter.post('/resale/transfer', (req: Request, res: Response) => {
   const { ticketId, sellerId, buyerId, resalePrice } = req.body;
+  if (!ticketId || !sellerId || !buyerId || resalePrice === undefined) {
+    return res.status(400).json({ success: false, error: 'Missing transfer parameters' });
+  }
+
   const result = resaleService.transferTicket({
     ticketId,
     sellerId,
@@ -216,36 +233,57 @@ apiRouter.post('/resale/transfer', (req: Request, res: Response) => {
   res.json(result);
 });
 
-apiRouter.get('/resale/history', (req: Request, res: Response) => {
-  const eventId = req.query.eventId as string | undefined;
-  const history = resaleService.getResaleHistory(eventId);
-  res.json({ success: true, history });
-});
+// ==========================================
+// 7. Privacy-First "Going" Social Graph
+// ==========================================
+const handleSetGoing = (req: Request, res: Response) => {
+  const eventId = String(req.params.id || req.body.eventId);
+  const { userId, visibility } = req.body;
 
-// ==========================================
-// 6. Social / "Going" Layer
-// ==========================================
-apiRouter.post('/social/going', (req: Request, res: Response) => {
-  const { userId, eventId, visibility } = req.body;
-  const result = socialService.setGoingStatus(userId, eventId, (visibility as GoingVisibility) || 'private');
-  res.json({ success: true, going: result });
-});
+  if (!userId || !visibility || !eventId) {
+    return res.status(400).json({ success: false, error: 'userId, eventId, and visibility required' });
+  }
+
+  socialService.setGoingStatus(userId, eventId, visibility as GoingVisibility);
+  res.json({ success: true, eventId, visibility });
+};
+
+apiRouter.post('/social/going', handleSetGoing);
+apiRouter.post('/events/:id/going', handleSetGoing);
 
 apiRouter.get('/social/going/:eventId', (req: Request, res: Response) => {
   const eventId = String(req.params.eventId);
-  const userId = req.query.userId as string | undefined;
-  const going = userId ? socialService.getGoingStatus(userId, eventId) : null;
-  const attending = socialService.getFriendsAttendingEvent(userId || null, eventId);
+  const userId = req.query.userId as string;
+  const status = socialService.getGoingStatus(userId || '', eventId);
+  res.json({ success: true, userGoing: status });
+});
 
-  res.json({
-    success: true,
-    userGoing: going,
-    friendsAttending: attending,
-  });
+apiRouter.get('/events/:id/going/status', (req: Request, res: Response) => {
+  const eventId = String(req.params.id);
+  const userId = req.query.userId as string;
+  if (!userId) return res.status(400).json({ success: false, error: 'userId query param required' });
+
+  const status = socialService.getGoingStatus(userId, eventId);
+  res.json({ success: true, userGoing: status });
 });
 
 // ==========================================
-// 7. Organizer Dashboard & Analytics
+// 8. Post-Event Reviews & Memory Loops
+// ==========================================
+apiRouter.post('/events/:id/reviews', (req: Request, res: Response) => {
+  const eventId = String(req.params.id);
+  const { userId, reaction, comment, photoUrl } = req.body;
+
+  if (!userId || !reaction) {
+    return res.status(400).json({ success: false, error: 'userId and reaction required' });
+  }
+
+  const result = socialService.addPostEventReview(eventId, userId, reaction, comment, photoUrl);
+  res.status(201).json(result);
+});
+
+// ==========================================
+// 9. Organizer Real-Time Telemetry & Operations
 // ==========================================
 apiRouter.get('/organizer/analytics/:organizerId', (req: Request, res: Response) => {
   const organizerId = String(req.params.organizerId);
@@ -304,4 +342,98 @@ apiRouter.post('/organizer/refund-ticket', (req: Request, res: Response) => {
     return res.status(400).json(result);
   }
   res.json(result);
+});
+
+// ==========================================
+// 10. Super Admin Panel & Platform Oversight
+// ==========================================
+apiRouter.get('/admin/overview', (_req: Request, res: Response) => {
+  const totalUsers = (db.prepare(`SELECT COUNT(*) as count FROM users`).get() as any).count;
+  const totalEvents = (db.prepare(`SELECT COUNT(*) as count FROM events`).get() as any).count;
+  const totalTickets = (db.prepare(`SELECT COUNT(*) as count FROM tickets`).get() as any).count;
+  const totalOrders = (db.prepare(`SELECT COUNT(*) as count FROM orders WHERE status = 'confirmed'`).get() as any).count;
+  const grossVolume = (db.prepare(`SELECT COALESCE(SUM(total_amount), 0) as total FROM orders WHERE status = 'confirmed'`).get() as any).total;
+  const totalUsedTickets = (db.prepare(`SELECT COUNT(*) as count FROM tickets WHERE status = 'used'`).get() as any).count;
+  const totalRevokedTickets = (db.prepare(`SELECT COUNT(*) as count FROM tickets WHERE status IN ('revoked', 'refunded')`).get() as any).count;
+  const totalFraudAlerts = (db.prepare(`SELECT COUNT(*) as count FROM offline_scans_log WHERE is_flagged_duplicate = 1`).get() as any).count;
+
+  const users = db.prepare(`SELECT * FROM users ORDER BY created_at DESC`).all() as any[];
+  const events = db.prepare(`SELECT * FROM events ORDER BY created_at DESC`).all() as any[];
+  const recentOrders = db.prepare(`
+    SELECT o.*, u.name as buyerName, e.title as eventTitle
+    FROM orders o
+    JOIN users u ON o.buyer_user_id = u.id
+    JOIN events e ON o.event_id = e.id
+    ORDER BY o.created_at DESC
+    LIMIT 15
+  `).all() as any[];
+
+  const fraudAuditLogs = verificationService.getFraudAuditLog();
+
+  res.json({
+    success: true,
+    platformMetrics: {
+      totalUsers,
+      totalEvents,
+      totalTickets,
+      totalOrders,
+      grossVolume: Number(grossVolume.toFixed(2)),
+      totalUsedTickets,
+      totalRevokedTickets,
+      totalFraudAlerts,
+      cryptoStatus: {
+        algorithm: 'Ed25519 (Edwards-curve 25519)',
+        keyId: 'evnt_root_ed25519_v1',
+        status: 'ACTIVE_HEALTHY',
+        offlineManifestCache: true,
+      },
+    },
+    users,
+    events,
+    recentOrders,
+    fraudAuditLogs,
+  });
+});
+
+apiRouter.post('/admin/users/:userId/role', (req: Request, res: Response) => {
+  const userId = String(req.params.userId);
+  const { role } = req.body;
+
+  if (!['attendee', 'staff', 'organizer', 'admin'].includes(role)) {
+    return res.status(400).json({ success: false, error: 'Invalid role' });
+  }
+
+  db.prepare(`UPDATE users SET role = ? WHERE id = ?`).run(role, userId);
+  res.json({ success: true, userId, role });
+});
+
+apiRouter.post('/admin/events/:eventId/status', (req: Request, res: Response) => {
+  const eventId = String(req.params.eventId);
+  const { status } = req.body;
+
+  if (!['published', 'cancelled', 'ended', 'draft'].includes(status)) {
+    return res.status(400).json({ success: false, error: 'Invalid status' });
+  }
+
+  db.prepare(`UPDATE events SET status = ? WHERE id = ?`).run(status, eventId);
+  res.json({ success: true, eventId, status });
+});
+
+apiRouter.post('/admin/system/broadcast', (req: Request, res: Response) => {
+  const { title, message, type } = req.body;
+  if (!title || !message) {
+    return res.status(400).json({ success: false, error: 'title and message required' });
+  }
+
+  const allUsers = db.prepare(`SELECT id FROM users`).all() as { id: string }[];
+  for (const u of allUsers) {
+    notificationsService.notify(
+      u.id,
+      (type as any) || 'gate_update',
+      title,
+      message
+    );
+  }
+
+  res.json({ success: true, broadcastCount: allUsers.length });
 });

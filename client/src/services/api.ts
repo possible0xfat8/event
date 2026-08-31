@@ -91,7 +91,7 @@ export const api = {
     quantity: number;
     idempotencyKey: string;
   }): Promise<{ success: boolean; orderId?: string; tickets?: TicketItem[]; error?: string; isSoldOut?: boolean }> {
-    const res = await fetch(`${API_BASE}/orders/purchase`, {
+    const res = await fetch(`${API_BASE}/checkout`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
@@ -110,16 +110,16 @@ export const api = {
 
   // Social "Going"
   async setGoingStatus(userId: string, eventId: string, visibility: 'private' | 'friends_only' | 'public') {
-    const res = await fetch(`${API_BASE}/social/going`, {
+    const res = await fetch(`${API_BASE}/events/${eventId}/going`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, eventId, visibility }),
+      body: JSON.stringify({ userId, visibility }),
     });
     return await res.json();
   },
 
   async getGoingStatus(eventId: string, userId?: string) {
-    const res = await fetch(`${API_BASE}/social/going/${eventId}${userId ? `?userId=${userId}` : ''}`);
+    const res = await fetch(`${API_BASE}/events/${eventId}/going/status${userId ? `?userId=${userId}` : ''}`);
     return await res.json();
   },
 
@@ -148,16 +148,11 @@ export const api = {
   },
 
   // Cryptographic Verification & Offline Scanner
-  async getPublicKey(): Promise<{ pem: string; rawBase64: string }> {
-    const res = await fetch(`${API_BASE}/verify/public-key`);
-    return await res.json();
-  },
-
-  async scanTicketOnline(token: string, scannerDeviceId: string, targetEventId?: string) {
+  async scanTicketOnline(signedToken: string, scannerDeviceId: string, gateEventId?: string) {
     const res = await fetch(`${API_BASE}/verify/scan`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, scannerDeviceId, targetEventId }),
+      body: JSON.stringify({ signedToken, scannerDeviceId, gateEventId }),
     });
     return await res.json();
   },
@@ -168,11 +163,11 @@ export const api = {
     return data.manifest || null;
   },
 
-  async syncOfflineScans(scans: QueuedOfflineScan[]) {
+  async syncOfflineScans(offlineScans: QueuedOfflineScan[]) {
     const res = await fetch(`${API_BASE}/verify/sync-offline`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scans }),
+      body: JSON.stringify({ offlineScans }),
     });
     return await res.json();
   },
@@ -188,6 +183,39 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ticketId, organizerId }),
+    });
+    return await res.json();
+  },
+
+  // Super Admin API
+  async getAdminOverview() {
+    const res = await fetch(`${API_BASE}/admin/overview`);
+    return await res.json();
+  },
+
+  async updateUserRole(userId: string, role: string) {
+    const res = await fetch(`${API_BASE}/admin/users/${userId}/role`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role }),
+    });
+    return await res.json();
+  },
+
+  async updateEventStatus(eventId: string, status: string) {
+    const res = await fetch(`${API_BASE}/admin/events/${eventId}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    });
+    return await res.json();
+  },
+
+  async broadcastNotification(title: string, message: string, type?: string) {
+    const res = await fetch(`${API_BASE}/admin/system/broadcast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, message, type }),
     });
     return await res.json();
   },

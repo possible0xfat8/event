@@ -9,6 +9,7 @@ import { CheckoutModal } from './components/CheckoutModal';
 import { TicketWallet } from './components/TicketWallet';
 import { ScannerMode } from './components/ScannerMode';
 import { OrganizerDashboard } from './components/OrganizerDashboard';
+import { AdminPanel } from './components/AdminPanel';
 import { SocialTab } from './components/SocialTab';
 import { NotificationDrawer } from './components/NotificationDrawer';
 
@@ -83,10 +84,14 @@ export const App: React.FC = () => {
     });
   }, []);
 
-  // Strict RBAC Redirection: If current user is attendee, prevent access to scanner or organizer tabs
+  // Strict RBAC Redirection: If current user is attendee, prevent access to scanner/organizer/admin tabs
   useEffect(() => {
     if (currentUser?.role === 'attendee') {
-      if (activeTab === 'scanner' || activeTab === 'organizer') {
+      if (activeTab === 'scanner' || activeTab === 'organizer' || activeTab === 'admin') {
+        setActiveTab('explore');
+      }
+    } else if (currentUser?.role === 'staff' || currentUser?.role === 'organizer') {
+      if (activeTab === 'admin') {
         setActiveTab('explore');
       }
     }
@@ -129,9 +134,11 @@ export const App: React.FC = () => {
 
   const handleUserChange = (newUser: User) => {
     setCurrentUser(newUser);
-    if (newUser.role === 'staff') {
+    if (newUser.role === 'admin') {
+      setActiveTab('admin');
+    } else if (newUser.role === 'staff') {
       setActiveTab('scanner');
-    } else if (newUser.role === 'organizer' || newUser.role === 'admin') {
+    } else if (newUser.role === 'organizer') {
       setActiveTab('organizer');
     } else {
       setActiveTab('explore');
@@ -236,6 +243,13 @@ export const App: React.FC = () => {
             scannerDeviceId={currentUser.role === 'staff' ? `gate_scanner_${currentUser.name.toLowerCase().replace(/[^a-z0-9]/g, '_')}` : 'admin_handheld_gate_1'}
             networkStatus={networkStatus}
             onToggleNetworkStatus={setNetworkStatus}
+          />
+        )}
+
+        {activeTab === 'admin' && currentUser.role === 'admin' && (
+          <AdminPanel
+            currentUser={currentUser}
+            onRefreshEvents={fetchEvents}
           />
         )}
       </main>
