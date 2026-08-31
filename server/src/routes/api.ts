@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db/index.js';
 import { discoveryService } from '../services/discoveryService.js';
 import { inventoryService } from '../services/inventoryService.js';
@@ -283,7 +284,7 @@ apiRouter.post('/events/:id/reviews', (req: Request, res: Response) => {
 });
 
 // ==========================================
-// 9. Organizer Real-Time Telemetry & Operations
+// 9. Organizer Real-Time Operations, Staff & Telemetry
 // ==========================================
 apiRouter.get('/organizer/analytics/:organizerId', (req: Request, res: Response) => {
   const organizerId = String(req.params.organizerId);
@@ -320,6 +321,18 @@ apiRouter.get('/organizer/analytics/:organizerId', (req: Request, res: Response)
 
   const fraudAlerts = verificationService.getFraudAuditLog();
 
+  // Assigned Staff Members for this Organizer
+  const assignedStaff = db.prepare(`
+    SELECT os.id as assignmentId, os.role_title, os.status as assignmentStatus, os.created_at as assignedAt,
+           u.id as userId, u.name as staffName, u.email as staffEmail, u.avatar as staffAvatar, u.role as userRole,
+           e.id as eventId, e.title as eventTitle
+    FROM organizer_staff os
+    JOIN users u ON os.staff_user_id = u.id
+    LEFT JOIN events e ON os.event_id = e.id
+    WHERE os.organizer_id = ? AND os.status = 'active'
+    ORDER BY os.created_at DESC
+  `).all(organizerId) as any[];
+
   res.json({
     success: true,
     summary: {
@@ -332,6 +345,7 @@ apiRouter.get('/organizer/analytics/:organizerId', (req: Request, res: Response)
     events,
     recentScans,
     fraudAlerts,
+    assignedStaff,
   });
 });
 
@@ -342,6 +356,179 @@ apiRouter.post('/organizer/refund-ticket', (req: Request, res: Response) => {
     return res.status(400).json(result);
   }
   res.json(result);
+});
+
+// Organizer: Assign Staff Role to User
+apiRouter.post('/organizer/:organizerId/staff/assign', (req: Request, res: Response) => {
+  const organizerId = String(req.params.organizerId);
+  const { staffUserId, eventId, roleTitle } = req.body;
+
+  if (!staffUserId) {
+    return res.status(400).json({ success: false, error: 'staffUserId is required' });
+  }
+
+  const user = db.prepare(`SELECT * FROM users WHERE id = ?`).get(staffUserId) as any;
+  if (!user) {
+    return res.status(404).json({ success: false, error: 'User not found to assign staff role' });
+  }
+
+  // Grant 'staff' role if currently 'attendee'
+  if (user.role === 'attendee') {
+    db.prepare(`UPDATE users SET role = 'staff' WHERE id = ?`).run(staffUserId);
+  }
+
+  const assignmentId = `stf_${uuidv4()}`;
+  db.prepare(`
+    INSERT INTO organizer_staff (id, organizer_id, staff_user_id, event_id, role_title, status)
+    VALUES (?, ?, ?, ?, ?, 'active')
+  `).run(
+    assignmentId,
+    organizerId,
+    staffUserId,
+    eventId || null,
+    roleTitle || 'Door Gate Scanner'
+  );
+
+  // Notify the assigned staff user
+  const organizer = db.prepare(`SELECT name FROM users WHERE id = ?`).get(organizerId) as any;
+  const event = eventId ? db.prepare(`SELECT title FROM events WHERE id = ?`).get(eventId) as any : null;
+  
+  notificationsService.notify(
+    staffUserId,
+    'gate_update',
+    '🎉 You were assigned as Door Staff!',
+    `Organizer ${organizer?.name || 'an event organizer'} assigned you as "${roleTitle || 'Gate Scanner'}" for ${event?.title || 'all team events'}. You now have scanner access.`
+  );
+
+  res.json({
+    success: true,
+    assignmentId,
+    staffUserId,
+    roleTitle: roleTitle || 'Door Gate Scanner',
+  });
+});
+
+// Organizer: Revoke Staff Role
+apiRouter.post('/organizer/:organizerId/staff/:assignmentId/revoke', (req: Request, res: Response) => {
+  const organizerId = String(req.params.organizerId);
+  const assignmentId = String(req.params.assignmentId);
+
+  const assignment = db.prepare(`
+    SELECT * FROM organizer_staff WHERE id = ? AND organizer_id = ?
+  `).get(assignmentId, organizerId) as any;
+
+  if (!assignment) {
+    return res.status(404).json({ success: false, error: 'Staff assignment not found' });
+  }
+
+  // Mark assignment revoked
+  db.prepare(`UPDATE organizer_staff SET status = 'revoked' WHERE id = ?`).run(assignmentId);
+
+  // Check if staff user has any other active staff assignments
+  const remainingActive = db.prepare(`
+    SELECT COUNT(*) as count FROM organizer_staff WHERE staff_user_id = ? AND status = 'active'
+  `).get(assignment.staff_user_id) as any;
+
+  if (remainingActive.count === 0) {
+    // Revert role to attendee if they are not super admin or organizer
+    const targetUser = db.prepare(`SELECT role FROM users WHERE id = ?`).get(assignment.staff_user_id) as any;
+    if (targetUser && targetUser.role === 'staff') {
+      db.prepare(`UPDATE users SET role = 'attendee' WHERE id = ?`).run(assignment.staff_user_id);
+    }
+  }
+
+  res.json({ success: true, assignmentId, revoked: true });
+});
+
+// Organizer: Targeted Broadcast to Event Attendees
+apiRouter.post('/organizer/:organizerId/events/:eventId/broadcast', (req: Request, res: Response) => {
+  const organizerId = String(req.params.organizerId);
+  const eventId = String(req.params.eventId);
+  const { title, message } = req.body;
+
+  if (!title || !message) {
+    return res.status(400).json({ success: false, error: 'title and message required' });
+  }
+
+  const event = db.prepare(`SELECT * FROM events WHERE id = ? AND organizer_id = ?`).get(eventId, organizerId) as any;
+  if (!event) {
+    return res.status(404).json({ success: false, error: 'Event not found or unauthorized' });
+  }
+
+  // Find all ticket holders for this event
+  const ticketHolders = db.prepare(`
+    SELECT DISTINCT owner_user_id as userId FROM tickets WHERE event_id = ? AND status = 'valid'
+  `).all(eventId) as { userId: string }[];
+
+  for (const holder of ticketHolders) {
+    notificationsService.notify(
+      holder.userId,
+      'gate_update',
+      title,
+      `[${event.title}] ${message}`
+    );
+  }
+
+  res.json({
+    success: true,
+    eventId,
+    eventTitle: event.title,
+    sentCount: ticketHolders.length,
+  });
+});
+
+// Organizer: Update Event Resale Rules & Capacity
+apiRouter.post('/organizer/:organizerId/events/:eventId/settings', (req: Request, res: Response) => {
+  const organizerId = String(req.params.organizerId);
+  const eventId = String(req.params.eventId);
+  const { resaleAllowed, resalePriceCap, capacity } = req.body;
+
+  const event = db.prepare(`SELECT * FROM events WHERE id = ? AND organizer_id = ?`).get(eventId, organizerId) as any;
+  if (!event) {
+    return res.status(404).json({ success: false, error: 'Event not found or unauthorized' });
+  }
+
+  if (resaleAllowed !== undefined) {
+    db.prepare(`UPDATE events SET resale_allowed = ? WHERE id = ?`).run(resaleAllowed ? 1 : 0, eventId);
+  }
+
+  if (resalePriceCap !== undefined && Number(resalePriceCap) >= 1.0) {
+    db.prepare(`UPDATE events SET resale_price_cap = ? WHERE id = ?`).run(Number(resalePriceCap), eventId);
+  }
+
+  if (capacity !== undefined && Number(capacity) >= event.capacity) {
+    const diff = Number(capacity) - event.capacity;
+    db.prepare(`
+      UPDATE events 
+      SET capacity = ?, tickets_remaining = tickets_remaining + ?
+      WHERE id = ?
+    `).run(Number(capacity), diff, eventId);
+  }
+
+  const updated = db.prepare(`SELECT * FROM events WHERE id = ?`).get(eventId);
+  res.json({ success: true, event: updated });
+});
+
+// Organizer: Attendee Guestlist Inspection
+apiRouter.get('/organizer/:organizerId/events/:eventId/guestlist', (req: Request, res: Response) => {
+  const organizerId = String(req.params.organizerId);
+  const eventId = String(req.params.eventId);
+
+  const event = db.prepare(`SELECT * FROM events WHERE id = ? AND organizer_id = ?`).get(eventId, organizerId) as any;
+  if (!event) {
+    return res.status(404).json({ success: false, error: 'Event not found or unauthorized' });
+  }
+
+  const guestlist = db.prepare(`
+    SELECT t.id as ticketId, t.status, t.used_at, t.used_by_device_id, t.created_at,
+           u.id as userId, u.name as userName, u.email as userEmail, u.avatar as userAvatar
+    FROM tickets t
+    JOIN users u ON t.owner_user_id = u.id
+    WHERE t.event_id = ?
+    ORDER BY t.created_at DESC
+  `).all(eventId) as any[];
+
+  res.json({ success: true, eventTitle: event.title, guestlist });
 });
 
 // ==========================================

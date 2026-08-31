@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS users (
     email TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL,
     avatar TEXT,
-    role TEXT NOT NULL DEFAULT 'attendee', -- attendee | organizer | staff
+    role TEXT NOT NULL DEFAULT 'attendee', -- attendee | organizer | staff | admin
     notification_preferences TEXT DEFAULT '{"push": true, "email": true}',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -154,4 +154,19 @@ CREATE TABLE IF NOT EXISTS notifications (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
+
+CREATE TABLE IF NOT EXISTS organizer_staff (
+    id TEXT PRIMARY KEY,
+    organizer_id TEXT NOT NULL,
+    staff_user_id TEXT NOT NULL,
+    event_id TEXT, -- NULL means all organizer events
+    role_title TEXT DEFAULT 'Door Gate Scanner',
+    status TEXT NOT NULL DEFAULT 'active', -- active | revoked
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (organizer_id) REFERENCES users(id),
+    FOREIGN KEY (staff_user_id) REFERENCES users(id),
+    FOREIGN KEY (event_id) REFERENCES events(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_organizer_staff ON organizer_staff(organizer_id, staff_user_id);
 `;

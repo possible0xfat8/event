@@ -172,7 +172,7 @@ export const api = {
     return await res.json();
   },
 
-  // Organizer Analytics
+  // Organizer Analytics, Staff, Broadcast & Settings
   async getOrganizerAnalytics(organizerId: string) {
     const res = await fetch(`${API_BASE}/organizer/analytics/${organizerId}`);
     return await res.json();
@@ -184,6 +184,45 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ticketId, organizerId }),
     });
+    return await res.json();
+  },
+
+  async assignOrganizerStaff(organizerId: string, data: { staffUserId: string; eventId?: string; roleTitle?: string }) {
+    const res = await fetch(`${API_BASE}/organizer/${organizerId}/staff/assign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return await res.json();
+  },
+
+  async revokeOrganizerStaff(organizerId: string, assignmentId: string) {
+    const res = await fetch(`${API_BASE}/organizer/${organizerId}/staff/${assignmentId}/revoke`, {
+      method: 'POST',
+    });
+    return await res.json();
+  },
+
+  async sendEventBroadcast(organizerId: string, eventId: string, data: { title: string; message: string }) {
+    const res = await fetch(`${API_BASE}/organizer/${organizerId}/events/${eventId}/broadcast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return await res.json();
+  },
+
+  async updateEventSettings(organizerId: string, eventId: string, settings: { resaleAllowed?: boolean; resalePriceCap?: number; capacity?: number }) {
+    const res = await fetch(`${API_BASE}/organizer/${organizerId}/events/${eventId}/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    });
+    return await res.json();
+  },
+
+  async getEventGuestlist(organizerId: string, eventId: string) {
+    const res = await fetch(`${API_BASE}/organizer/${organizerId}/events/${eventId}/guestlist`);
     return await res.json();
   },
 
