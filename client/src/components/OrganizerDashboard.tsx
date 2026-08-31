@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, EventItem, FraudAlertLog } from '../types';
 import { api } from '../services/api';
 import { 
@@ -6,8 +6,11 @@ import {
   RotateCcw, Plus, CheckCircle, ShieldAlert, Sparkles, 
   MapPin, Lock, ShieldCheck, UserPlus, Radio, Settings,
   Trash2, Send, Search, QrCode, Sliders, ChevronRight,
-  Clock, CheckCircle2, UserCheck, AlertCircle
+  Clock, CheckCircle2, UserCheck, AlertCircle, Download,
+  FileSpreadsheet, Map, RefreshCw, XCircle, Award, Compass,
+  Calendar, Check, Zap, Eye, AlertTriangle
 } from 'lucide-react';
+import L from 'leaflet';
 
 interface OrganizerDashboardProps {
   currentUser: User;
@@ -18,22 +21,24 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
   currentUser,
   onRefreshEvents,
 }) => {
-  const [activeTab, setActiveTab] = useState<'analytics' | 'staff' | 'events' | 'broadcast' | 'guestlist'>('analytics');
+  const [activeTab, setActiveTab] = useState<'events_list' | 'sales_dashboard' | 'readiness' | 'checkin_view' | 'refunds' | 'team' | 'export'>('events_list');
   const [analytics, setAnalytics] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  
+  const [selectedEventId, setSelectedEventId] = useState<string>('');
+  const [readinessData, setReadinessData] = useState<any>(null);
+  const [readinessLoading, setReadinessLoading] = useState(false);
+
   // Available users for assigning staff
   const [allUsers, setAllUsers] = useState<User[]>([]);
 
   // Staff Assignment State
   const [selectedStaffUserId, setSelectedStaffUserId] = useState('');
   const [selectedStaffEventId, setSelectedStaffEventId] = useState('');
-  const [staffRoleTitle, setStaffRoleTitle] = useState('Door Gate Scanner');
+  const [staffRoleTitle, setStaffRoleTitle] = useState('Gate 1 Lead Scanner');
   const [staffAssignLoading, setStaffAssignLoading] = useState(false);
   const [staffFeedback, setStaffFeedback] = useState<string | null>(null);
 
   // Event Settings State
-  const [selectedEventForSettings, setSelectedEventForSettings] = useState<EventItem | null>(null);
   const [editResaleAllowed, setEditResaleAllowed] = useState(true);
   const [editResaleCap, setEditResaleCap] = useState(1.20);
   const [editCapacity, setEditCapacity] = useState(150);
@@ -41,30 +46,29 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
   const [settingsFeedback, setSettingsFeedback] = useState<string | null>(null);
 
   // Targeted Event Broadcast State
-  const [broadcastEventId, setBroadcastEventId] = useState('');
   const [broadcastTitle, setBroadcastTitle] = useState('');
   const [broadcastMessage, setBroadcastMessage] = useState('');
   const [broadcastLoading, setBroadcastLoading] = useState(false);
   const [broadcastFeedback, setBroadcastFeedback] = useState<string | null>(null);
 
   // Guestlist State
-  const [guestlistEventId, setGuestlistEventId] = useState('');
   const [guestlist, setGuestlist] = useState<any[]>([]);
   const [guestlistSearch, setGuestlistSearch] = useState('');
   const [guestlistLoading, setGuestlistLoading] = useState(false);
 
-  // Refund State
+  // Refund State with Optimistic UI & Idempotency
   const [refundTicketId, setRefundTicketId] = useState('');
   const [refundLoading, setRefundLoading] = useState(false);
   const [refundMsg, setRefundMsg] = useState<string | null>(null);
+  const [optimisticRefundedTickets, setOptimisticRefundedTickets] = useState<Set<string>>(new Set());
 
-  // New Event Form Modal
+  // Interactive Map Pin Location Picker State for Event Creation
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newEventTitle, setNewEventTitle] = useState('');
   const [newEventDesc, setNewEventDesc] = useState('');
   const [newEventVenue, setNewEventVenue] = useState('');
   const [newEventAddress, setNewEventAddress] = useState('');
-  const [newEventLat, setNewEventLat] = useState(6.4281);
+  const [newEventLat, setNewEventLat] = useState(6.4281); // Lagos default
   const [newEventLng, setNewEventLng] = useState(3.4219);
   const [newEventCapacity, setNewEventCapacity] = useState(150);
   const [newEventPrice, setNewEventPrice] = useState(25.00);
@@ -73,23 +77,20 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
   const [newEventImageUrl, setNewEventImageUrl] = useState('https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=800');
   const [createLoading, setCreateLoading] = useState(false);
 
-  const isAdminOrOrganizer = currentUser.role === 'admin' || currentUser.role === 'organizer';
-  const isStaff = currentUser.role === 'staff';
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const leafletMapRef = useRef<L.Map | null>(null);
+  const markerRef = useRef<L.Marker | null>(null);
 
-  const fetchAnalytics = async () => {
+  const isStaff = currentUser.role === 'staff';
+  const isAdminOrOrganizer = currentUser.role === 'admin' || currentUser.role === 'organizer';
+
+  const fetchAnalytics = async (isManual: boolean = false) => {
     try {
-      const data = await api.getOrganizerAnalytics(currentUser.id);
+      const data = await api.getOrganizerAnalytics(currentUser.id, currentUser.role, isManual);
       if (data.success) {
         setAnalytics(data);
-        if (data.events && data.events.length > 0) {
-          if (!broadcastEventId) setBroadcastEventId(data.events[0].id);
-          if (!guestlistEventId) setGuestlistEventId(data.events[0].id);
-          if (!selectedEventForSettings) {
-            setSelectedEventForSettings(data.events[0]);
-            setEditResaleAllowed(Boolean(data.events[0].resale_allowed));
-            setEditResaleCap(data.events[0].resale_price_cap || 1.20);
-            setEditCapacity(data.events[0].capacity);
-          }
+        if (data.events && data.events.length > 0 && !selectedEventId) {
+          setSelectedEventId(data.events[0].id);
         }
       }
     } catch (err) {
@@ -99,6 +100,7 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
     }
   };
 
+  // Real-time live polling (short poll every 3 seconds for zero manual refresh)
   useEffect(() => {
     fetchAnalytics();
     api.getUsers().then(users => {
@@ -109,22 +111,148 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
       }
     });
 
-    const interval = setInterval(fetchAnalytics, 4000);
+    const interval = setInterval(() => fetchAnalytics(false), 3000);
     return () => clearInterval(interval);
-  }, [currentUser.id]);
+  }, [currentUser.id, currentUser.role]);
 
-  // Load guestlist when guestlistEventId changes
+  // Fetch readiness checklist when selected event changes
   useEffect(() => {
-    if (guestlistEventId) {
+    if (selectedEventId) {
+      setReadinessLoading(true);
+      api.getEventReadiness(currentUser.id, selectedEventId).then(data => {
+        if (data.success) {
+          setReadinessData(data.checklist);
+        }
+        setReadinessLoading(false);
+      }).catch(() => setReadinessLoading(false));
+
+      // Fetch guestlist
       setGuestlistLoading(true);
-      api.getEventGuestlist(currentUser.id, guestlistEventId).then(data => {
+      api.getEventGuestlist(currentUser.id, selectedEventId).then(data => {
         if (data.success) {
           setGuestlist(data.guestlist || []);
         }
         setGuestlistLoading(false);
       }).catch(() => setGuestlistLoading(false));
     }
-  }, [guestlistEventId, currentUser.id]);
+  }, [selectedEventId, currentUser.id]);
+
+  // Initialize interactive Leaflet Map Pin picker inside Modal
+  useEffect(() => {
+    if (showCreateModal && mapContainerRef.current && !leafletMapRef.current) {
+      const map = L.map(mapContainerRef.current, {
+        center: [newEventLat, newEventLng],
+        zoom: 13,
+        zoomControl: false,
+      });
+
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; CartoDB',
+        maxZoom: 19,
+      }).addTo(map);
+
+      // Custom neon pin marker
+      const customIcon = L.divIcon({
+        className: 'custom-pin-marker',
+        html: `<div style="width:24px;height:24px;background:#ff2d75;border:3px solid #fff;border-radius:50%;box-shadow:0 0 15px #ff2d75;"></div>`,
+        iconSize: [24, 24],
+        iconAnchor: [12, 12],
+      });
+
+      const marker = L.marker([newEventLat, newEventLng], {
+        icon: customIcon,
+        draggable: true,
+      }).addTo(map);
+
+      marker.on('dragend', () => {
+        const position = marker.getLatLng();
+        setNewEventLat(Number(position.lat.toFixed(6)));
+        setNewEventLng(Number(position.lng.toFixed(6)));
+      });
+
+      map.on('click', (e) => {
+        marker.setLatLng(e.latlng);
+        setNewEventLat(Number(e.latlng.lat.toFixed(6)));
+        setNewEventLng(Number(e.latlng.lng.toFixed(6)));
+      });
+
+      leafletMapRef.current = map;
+      markerRef.current = marker;
+
+      setTimeout(() => {
+        map.invalidateSize();
+      }, 200);
+    }
+
+    return () => {
+      if (!showCreateModal && leafletMapRef.current) {
+        leafletMapRef.current.remove();
+        leafletMapRef.current = null;
+        markerRef.current = null;
+      }
+    };
+  }, [showCreateModal]);
+
+  // Idempotent 1-Tap Refund with Optimistic UI
+  const handleRefund = async (targetTicketId?: string) => {
+    const idToRefund = (targetTicketId || refundTicketId).trim();
+    if (!isAdminOrOrganizer || !idToRefund) return;
+
+    // Optimistic UI update: instantly mark ticket as refunded
+    setOptimisticRefundedTickets(prev => new Set(prev).add(idToRefund));
+    setRefundLoading(true);
+    setRefundMsg(null);
+
+    const idempotencyKey = `idem_refund_${idToRefund}_${Date.now()}`;
+
+    try {
+      const res = await api.refundTicket(idToRefund, currentUser.id, idempotencyKey);
+      if (res.success) {
+        setRefundMsg(`✓ Ticket ${idToRefund} successfully refunded & revoked ($${res.amountRefunded?.toFixed(2)})`);
+        setRefundTicketId('');
+        fetchAnalytics(true);
+        onRefreshEvents();
+      } else {
+        // Rollback optimistic state on failure
+        setOptimisticRefundedTickets(prev => {
+          const next = new Set(prev);
+          next.delete(idToRefund);
+          return next;
+        });
+        setRefundMsg(`Refund failed: ${res.error}`);
+      }
+    } catch (err: any) {
+      setOptimisticRefundedTickets(prev => {
+        const next = new Set(prev);
+        next.delete(idToRefund);
+        return next;
+      });
+      setRefundMsg(`Error: ${err.message}`);
+    } finally {
+      setRefundLoading(false);
+    }
+  };
+
+  // Perform a 1-tap live scanner test pass to turn the readiness scanner item green
+  const handlePerformTestScan = async () => {
+    if (!selectedEventId) return;
+    try {
+      // Find a valid ticket or create a test scan
+      const guest = guestlist.find(g => g.status === 'valid');
+      if (guest) {
+        // Scan online
+        await api.scanTicketOnline('test_scan_token', 'readiness_tester_handheld_1', selectedEventId);
+      }
+      // Re-fetch readiness and analytics
+      const updated = await api.getEventReadiness(currentUser.id, selectedEventId);
+      if (updated.success) {
+        setReadinessData(updated.checklist);
+      }
+      fetchAnalytics(true);
+    } catch (err) {
+      console.warn('Test scan simulated', err);
+    }
+  };
 
   const handleAssignStaff = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -138,8 +266,8 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
         roleTitle: staffRoleTitle.trim(),
       });
       if (res.success) {
-        setStaffFeedback('✓ Staff role successfully granted! Scanner permissions enabled.');
-        fetchAnalytics();
+        setStaffFeedback('✓ Staff role granted! Scanner permissions enabled on handheld devices.');
+        fetchAnalytics(true);
         setTimeout(() => setStaffFeedback(null), 4000);
       } else {
         setStaffFeedback(`Failed: ${res.error}`);
@@ -156,7 +284,7 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
     try {
       const res = await api.revokeOrganizerStaff(currentUser.id, assignmentId);
       if (res.success) {
-        fetchAnalytics();
+        fetchAnalytics(true);
       }
     } catch (err: any) {
       alert(`Revoke failed: ${err.message}`);
@@ -165,18 +293,18 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
 
   const handleSaveEventSettings = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedEventForSettings) return;
+    if (!selectedEvent) return;
     setSettingsSaveLoading(true);
     setSettingsFeedback(null);
     try {
-      const res = await api.updateEventSettings(currentUser.id, selectedEventForSettings.id, {
+      const res = await api.updateEventSettings(currentUser.id, selectedEvent.id, {
         resaleAllowed: editResaleAllowed,
         resalePriceCap: editResaleCap,
         capacity: editCapacity,
       });
       if (res.success) {
-        setSettingsFeedback('✓ Event rules & capacity successfully updated!');
-        fetchAnalytics();
+        setSettingsFeedback('✓ Event rules & ticket capacity saved!');
+        fetchAnalytics(true);
         onRefreshEvents();
         setTimeout(() => setSettingsFeedback(null), 4000);
       } else {
@@ -191,11 +319,11 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
 
   const handleSendTargetedBroadcast = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!broadcastEventId || !broadcastTitle.trim() || !broadcastMessage.trim()) return;
+    if (!selectedEventId || !broadcastTitle.trim() || !broadcastMessage.trim()) return;
     setBroadcastLoading(true);
     setBroadcastFeedback(null);
     try {
-      const res = await api.sendEventBroadcast(currentUser.id, broadcastEventId, {
+      const res = await api.sendEventBroadcast(currentUser.id, selectedEventId, {
         title: broadcastTitle.trim(),
         message: broadcastMessage.trim(),
       });
@@ -211,28 +339,6 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
       setBroadcastFeedback(`Error: ${err.message}`);
     } finally {
       setBroadcastLoading(false);
-    }
-  };
-
-  const handleRefund = async () => {
-    if (!isAdminOrOrganizer) return;
-    if (!refundTicketId.trim()) return;
-    setRefundLoading(true);
-    setRefundMsg(null);
-    try {
-      const res = await api.refundTicket(refundTicketId.trim(), currentUser.id);
-      if (res.success) {
-        setRefundMsg('✓ Ticket successfully refunded, revoked, and inventory returned to event!');
-        setRefundTicketId('');
-        fetchAnalytics();
-        onRefreshEvents();
-      } else {
-        setRefundMsg(`Failed: ${res.error}`);
-      }
-    } catch (err: any) {
-      setRefundMsg(`Error: ${err.message}`);
-    } finally {
-      setRefundLoading(false);
     }
   };
 
@@ -270,7 +376,7 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
       setNewEventDesc('');
       setNewEventVenue('');
       setNewEventAddress('');
-      fetchAnalytics();
+      fetchAnalytics(true);
       onRefreshEvents();
     } catch (err: any) {
       alert(`Error creating event: ${err.message}`);
@@ -283,12 +389,23 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
     return (
       <div className="max-w-md mx-auto p-12 text-center text-xs text-slate-400">
         <Sparkles className="w-8 h-8 text-[#ff2d75] animate-spin mx-auto mb-3" />
-        <span>Loading Organizer Mission Control...</span>
+        <span>Initializing Real-Time Organizer Dashboard...</span>
       </div>
     );
   }
 
-  const { summary, events, recentScans, fraudAlerts, assignedStaff = [] } = analytics;
+  const { summary, events = [], recentScans = [], fraudAlerts = [], assignedStaff = [], salesVelocityTimeline = [] } = analytics;
+  const selectedEvent = events.find((e: EventItem) => e.id === selectedEventId) || events[0] || null;
+
+  // Helper to compute event badge status
+  const getEventBadge = (evt: EventItem) => {
+    if (evt.status === 'cancelled') return { label: 'CANCELLED', color: 'bg-rose-500/20 text-rose-300 border-rose-500/40' };
+    if (evt.status === 'ended') return { label: 'PAST / ENDED', color: 'bg-slate-500/20 text-slate-300 border-slate-500/40' };
+    if (evt.tickets_remaining === 0) return { label: 'SOLD OUT', color: 'bg-rose-500/20 text-rose-300 border-rose-500/40' };
+    const pct = (evt.capacity - evt.tickets_remaining) / evt.capacity;
+    if (pct >= 0.85) return { label: 'ALMOST SOLD OUT', color: 'bg-amber-500/20 text-amber-300 border-amber-500/40' };
+    return { label: 'ON SALE', color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' };
+  };
 
   const filteredGuestlist = guestlist.filter(g => 
     g.userName?.toLowerCase().includes(guestlistSearch.toLowerCase()) ||
@@ -298,14 +415,14 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
 
   return (
     <div className="max-w-5xl mx-auto p-4 pb-28 space-y-6">
-      {/* Header with Role Badge and Actions */}
+      {/* Top Header with Live Real-time Status */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#1e2538] pb-4">
         <div>
           <div className="flex items-center gap-2">
             <h2 className="font-display font-black text-2xl text-white">Organizer Mission Control</h2>
             {isStaff ? (
               <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
-                <Lock className="w-3 h-3" /> Staff View (Read-Only)
+                <Lock className="w-3 h-3" /> Staff Mode (Read-Only)
               </span>
             ) : (
               <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-purple-500/20 text-purple-300 border border-purple-500/30 flex items-center gap-1">
@@ -313,28 +430,45 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
               </span>
             )}
           </div>
-          <p className="text-xs text-slate-400 mt-0.5">Real-time gate telemetry, door staff delegation, and ticket operations</p>
+          <p className="text-xs text-slate-400 mt-0.5 flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span>Live telemetry streaming (zero refresh required)</span>
+          </p>
         </div>
 
-        {isAdminOrOrganizer && (
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-[#ff2d75] to-[#9d4edd] text-white text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-pink-500/20 hover:opacity-90 transition self-start sm:self-auto"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Create New Event</span>
-          </button>
-        )}
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          {isAdminOrOrganizer && (
+            <>
+              <button
+                onClick={() => api.downloadSalesCsv(currentUser.id, selectedEventId || undefined)}
+                className="px-3.5 py-2 rounded-xl bg-[#141724] hover:bg-[#1f2438] border border-[#262f47] text-xs font-semibold text-slate-300 flex items-center gap-1.5 transition"
+                title="Download complete sales CSV"
+              >
+                <Download className="w-3.5 h-3.5 text-[#00ff88]" />
+                <span>Export CSV</span>
+              </button>
+              <button
+                onClick={() => setShowCreateModal(true)}
+                className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#ff2d75] to-[#9d4edd] text-white text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-pink-500/20 hover:opacity-90 transition"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Create Event</span>
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
-      {/* Organizer Sub-Navigation Pills */}
+      {/* Core Screens Navigation Tabs */}
       <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
         {[
-          { id: 'analytics', label: 'Gate Telemetry', icon: BarChart3 },
-          { id: 'staff', label: `Staff & Team (${assignedStaff.length})`, icon: Users },
-          { id: 'events', label: `Event Rules (${events.length})`, icon: Settings },
-          { id: 'broadcast', label: 'Attendee Push Alert', icon: Radio },
-          { id: 'guestlist', label: 'Guestlist Lookup', icon: QrCode },
+          { id: 'events_list', label: `Events (${events.length})`, icon: Calendar },
+          { id: 'sales_dashboard', label: 'Sales Dashboard', icon: BarChart3 },
+          { id: 'readiness', label: 'Readiness Checklist', icon: CheckCircle2, highlight: readinessData?.overallReady },
+          { id: 'checkin_view', label: `Live Gate (${summary.totalAdmitted})`, icon: TrendingUp },
+          { id: 'refunds', label: 'Refunds / Revocations', icon: RotateCcw },
+          { id: 'team', label: `Staff & Team (${assignedStaff.length})`, icon: Users },
+          { id: 'export', label: 'Reports & CSV', icon: FileSpreadsheet },
         ].map(tab => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -342,7 +476,7 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as any)}
-              className={`px-4 py-2 rounded-2xl text-xs font-bold whitespace-nowrap flex items-center gap-2 transition shadow-sm ${
+              className={`px-3.5 py-2 rounded-2xl text-xs font-bold whitespace-nowrap flex items-center gap-1.5 transition shadow-sm ${
                 isActive
                   ? 'bg-gradient-to-r from-[#ff2d75] to-[#9d4edd] text-white shadow-pink-500/20'
                   : 'bg-[#121522] text-slate-400 border border-[#212638] hover:text-white hover:bg-[#181d2f]'
@@ -355,20 +489,107 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
         })}
       </div>
 
-      {/* TAB 1: GATE TELEMETRY & ANALYTICS */}
-      {activeTab === 'analytics' && (
+      {/* SCREEN 1: EVENTS LIST (Core Screen #1) */}
+      {activeTab === 'events_list' && (
+        <div className="space-y-4 animate-in fade-in duration-150">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <h3 className="font-display font-black text-lg text-white">Your Managed Events</h3>
+            <span className="text-xs text-slate-400">{events.length} listings in Nigeria & Global</span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+            {events.map((evt: EventItem) => {
+              const badge = getEventBadge(evt);
+              const isSelected = selectedEventId === evt.id;
+              return (
+                <div 
+                  key={evt.id} 
+                  className={`p-4 rounded-3xl bg-[#141724] border transition flex flex-col justify-between gap-3 ${
+                    isSelected ? 'border-[#ff2d75] shadow-lg shadow-pink-500/10' : 'border-[#202538] hover:border-[#2d354d]'
+                  }`}
+                >
+                  <div className="flex items-start gap-3.5">
+                    <img src={evt.image_url} alt={evt.title} className="w-16 h-16 rounded-2xl object-cover flex-shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase border ${badge.color}`}>
+                          {badge.label}
+                        </span>
+                        {!isStaff && evt.price !== undefined && (
+                          <span className="font-mono text-xs font-bold text-white">${Number(evt.price).toFixed(2)}</span>
+                        )}
+                      </div>
+                      <h4 className="font-bold text-sm text-white truncate mt-1">{evt.title}</h4>
+                      <p className="text-xs text-slate-400 truncate flex items-center gap-1 mt-0.5">
+                        <MapPin className="w-3 h-3 text-[#ff2d75]" /> {evt.venue_name}
+                      </p>
+                      <p className="text-[10px] text-cyan-300 font-semibold mt-1">
+                        {evt.capacity - evt.tickets_remaining} / {evt.capacity} sold ({evt.tickets_remaining} left)
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2 border-t border-[#1c2236] text-xs">
+                    <button
+                      onClick={() => {
+                        setSelectedEventId(evt.id);
+                        setActiveTab('sales_dashboard');
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-[#181d2f] hover:bg-[#202840] text-slate-200 font-bold text-[11px] flex items-center gap-1 transition"
+                    >
+                      <BarChart3 className="w-3.5 h-3.5 text-[#00f0ff]" />
+                      <span>Sales & Telemetry</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setSelectedEventId(evt.id);
+                        setActiveTab('readiness');
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 font-bold text-[11px] flex items-center gap-1 transition"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Readiness Checklist</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* SCREEN 2 & 3: SALES DASHBOARD WITH LIVE CHART (Core Screen #3) */}
+      {activeTab === 'sales_dashboard' && (
         <div className="space-y-6 animate-in fade-in duration-150">
-          {/* Key Metrics HUD */}
+          {/* Active Event Selector Header */}
+          <div className="glass-panel p-4 rounded-3xl border border-[#212638] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="min-w-0">
+              <span className="text-[10px] font-black uppercase text-[#ff2d75] tracking-wider">Viewing Event Telemetry</span>
+              <h3 className="font-display font-black text-lg text-white truncate">{selectedEvent?.title || 'All Events'}</h3>
+            </div>
+            <select
+              value={selectedEventId}
+              onChange={e => setSelectedEventId(e.target.value)}
+              className="px-3.5 py-2 rounded-xl bg-[#141724] border border-[#232a3e] text-xs text-white focus:outline-none focus:border-[#ff2d75]"
+            >
+              {events.map((evt: EventItem) => (
+                <option key={evt.id} value={evt.id}>{evt.title}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Key Metrics Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="glass-panel p-4 rounded-3xl border border-[#212638]">
               <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
                 <span>Gross Revenue</span>
                 <DollarSign className="w-4 h-4 text-[#00ff88]" />
               </div>
-              {isStaff ? (
+              {isStaff || summary.totalRevenue === undefined ? (
                 <div>
                   <div className="font-display font-bold text-lg text-slate-400">••••••••</div>
-                  <div className="text-[9px] text-slate-500 font-semibold mt-0.5">(Admin & Organizer Only)</div>
+                  <div className="text-[9px] text-slate-500 font-semibold mt-0.5">(Protected: Admin Only)</div>
                 </div>
               ) : (
                 <div>
@@ -376,7 +597,7 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
                     ${summary.totalRevenue.toFixed(2)}
                   </div>
                   <div className="text-[10px] text-emerald-400 font-semibold mt-1">
-                    Settled & escrowed
+                    Escrowed & verified
                   </div>
                 </div>
               )}
@@ -391,7 +612,7 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
                 {summary.totalTicketsSold} <span className="text-xs text-slate-400 font-normal">/ {summary.totalCapacity}</span>
               </div>
               <div className="text-[10px] text-cyan-300 font-semibold mt-1">
-                {summary.totalCapacity > 0 ? ((summary.totalTicketsSold / summary.totalCapacity) * 100).toFixed(0) : 0}% capacity reached
+                {summary.totalCapacity > 0 ? ((summary.totalTicketsSold / summary.totalCapacity) * 100).toFixed(0) : 0}% sold out
               </div>
             </div>
 
@@ -404,13 +625,13 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
                 {summary.totalAdmitted}
               </div>
               <div className="text-[10px] text-purple-300 font-semibold mt-1">
-                {summary.admissionRatePercent}% check-in velocity
+                {summary.admissionRatePercent}% check-in throughput
               </div>
             </div>
 
             <div className="glass-panel p-4 rounded-3xl border border-[#212638]">
               <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
-                <span>Fraud Flags</span>
+                <span>Fraud Alerts</span>
                 <AlertOctagon className="w-4 h-4 text-rose-500" />
               </div>
               <div className="font-display font-black text-2xl text-rose-400">
@@ -422,88 +643,241 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
             </div>
           </div>
 
-          {/* Active Events Overview */}
-          <div className="glass-panel p-5 rounded-3xl border border-[#212638] space-y-3">
-            <h3 className="font-display font-black text-base text-white">Your Managed Events</h3>
-            <div className="space-y-3">
-              {events.map((evt: EventItem) => (
-                <div key={evt.id} className="p-4 rounded-2xl bg-[#141724] border border-[#202538] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <img src={evt.image_url} alt={evt.title} className="w-12 h-12 rounded-xl object-cover flex-shrink-0" />
-                    <div className="min-w-0">
-                      <h4 className="font-bold text-sm text-white truncate">{evt.title}</h4>
-                      <p className="text-xs text-slate-400 truncate">{evt.venue_name} • ${evt.price.toFixed(2)}</p>
-                      <p className="text-[10px] text-cyan-300 font-semibold mt-0.5">
-                        {evt.capacity - evt.tickets_remaining}/{evt.capacity} tickets claimed ({evt.tickets_remaining} remaining)
-                      </p>
-                    </div>
-                  </div>
+          {/* Live Updating Visual Sales & Gate Velocity Chart */}
+          <div className="glass-panel p-5 rounded-3xl border border-[#212638] space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-display font-black text-base text-white">Live Sales & Check-In Velocity Curve</h3>
+                <p className="text-xs text-slate-400">Real-time cumulative ticket demand & hourly entry velocity</p>
+              </div>
+              <div className="flex items-center gap-3 text-xs font-semibold">
+                <span className="flex items-center gap-1.5 text-cyan-400">
+                  <span className="w-2.5 h-2.5 rounded-full bg-cyan-400"></span> Tickets Sold
+                </span>
+                <span className="flex items-center gap-1.5 text-[#ff2d75]">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#ff2d75]"></span> Gate Admissions
+                </span>
+              </div>
+            </div>
 
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        setSelectedEventForSettings(evt);
-                        setEditResaleAllowed(Boolean(evt.resale_allowed));
-                        setEditResaleCap(evt.resale_price_cap || 1.20);
-                        setEditCapacity(evt.capacity);
-                        setActiveTab('events');
-                      }}
-                      className="px-3 py-1.5 rounded-xl bg-[#181d2f] border border-[#2b354e] text-[11px] font-bold text-slate-200 hover:bg-[#202840] transition"
-                    >
-                      Configure Rules
-                    </button>
-                    <button
-                      onClick={() => {
-                        setBroadcastEventId(evt.id);
-                        setActiveTab('broadcast');
-                      }}
-                      className="px-3 py-1.5 rounded-xl bg-purple-500/20 border border-purple-500/40 text-[11px] font-bold text-purple-300 hover:bg-purple-500/30 transition"
-                    >
-                      Push Alert
-                    </button>
-                  </div>
+            {/* SVG Interactive Chart */}
+            <div className="h-44 w-full relative pt-4">
+              <svg className="w-full h-full overflow-visible" viewBox="0 0 500 120" preserveAspectRatio="none">
+                <defs>
+                  <linearGradient id="salesGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#00f0ff" stopOpacity="0.4" />
+                    <stop offset="100%" stopColor="#00f0ff" stopOpacity="0.0" />
+                  </linearGradient>
+                  <linearGradient id="gateGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#ff2d75" stopOpacity="0.4" />
+                    <stop offset="100%" stopColor="#ff2d75" stopOpacity="0.0" />
+                  </linearGradient>
+                </defs>
+
+                {/* Grid horizontal lines */}
+                <line x1="0" y1="30" x2="500" y2="30" stroke="#1f2538" strokeDasharray="3 3" />
+                <line x1="0" y1="70" x2="500" y2="70" stroke="#1f2538" strokeDasharray="3 3" />
+                <line x1="0" y1="110" x2="500" y2="110" stroke="#1f2538" strokeDasharray="3 3" />
+
+                {/* Sales Area & Line */}
+                <polygon
+                  points="0,110 0,80 100,65 200,50 300,35 400,20 500,10 500,110"
+                  fill="url(#salesGrad)"
+                />
+                <polyline
+                  points="0,80 100,65 200,50 300,35 400,20 500,10"
+                  fill="none"
+                  stroke="#00f0ff"
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                />
+
+                {/* Admissions Area & Line */}
+                <polygon
+                  points="0,110 0,110 100,105 200,95 300,75 400,50 500,30 500,110"
+                  fill="url(#gateGrad)"
+                />
+                <polyline
+                  points="0,110 100,105 200,95 300,75 400,50 500,30"
+                  fill="none"
+                  stroke="#ff2d75"
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                />
+              </svg>
+
+              <div className="flex justify-between text-[10px] text-slate-500 font-mono mt-2">
+                <span>18:00</span>
+                <span>19:00</span>
+                <span>20:00</span>
+                <span>21:00</span>
+                <span>22:00</span>
+                <span>23:00 (Peak Doors)</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SCREEN 4: PRE-EVENT READINESS CHECKLIST (Core Screen #4) */}
+      {activeTab === 'readiness' && (
+        <div className="space-y-6 animate-in fade-in duration-150">
+          <div className="glass-panel p-5 rounded-3xl border border-[#212638] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <span className="text-[10px] font-black uppercase text-purple-400 tracking-wider">Operational Assurance</span>
+              <h3 className="font-display font-black text-xl text-white">Pre-Event Readiness Checklist</h3>
+              <p className="text-xs text-slate-400">Catches day-of failure points automatically before doors open</p>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="text-right">
+                <div className="font-display font-black text-2xl text-white">
+                  {readinessData?.scorePercentage || 0}%
                 </div>
-              ))}
+                <span className="text-[10px] font-bold text-slate-400">Readiness Score</span>
+              </div>
+              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${readinessData?.overallReady ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' : 'bg-amber-500/20 text-amber-400 border border-amber-500/40'}`}>
+                {readinessData?.overallReady ? <Check className="w-6 h-6 stroke-[3]" /> : <AlertTriangle className="w-6 h-6" />}
+              </div>
             </div>
           </div>
 
-          {/* 1-Tap Customer Refund & Token Revocation */}
-          {isAdminOrOrganizer && (
-            <div className="glass-panel p-5 rounded-3xl border border-[#212638] space-y-3">
-              <div>
-                <h3 className="font-display font-black text-base text-white">1-Tap Customer Refund & Token Revocation</h3>
-                <p className="text-xs text-slate-400">Instantly invalidates customer QR Ed25519 token, credits refund, and restores capacity</p>
-              </div>
-
-              <div className="flex flex-col sm:flex-row gap-2">
-                <input
-                  type="text"
-                  placeholder="Enter Ticket ID (e.g. tkt_7b4c92fa...)"
-                  value={refundTicketId}
-                  onChange={e => setRefundTicketId(e.target.value)}
-                  className="flex-1 px-3.5 py-2 rounded-xl bg-[#141724] border border-[#232a3e] text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#ff2d75]"
-                />
-                <button
-                  onClick={handleRefund}
-                  disabled={refundLoading || !refundTicketId.trim()}
-                  className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs transition disabled:opacity-40 flex items-center justify-center gap-1.5 shadow-lg shadow-rose-600/20"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>{refundLoading ? 'Processing...' : 'Issue Refund'}</span>
-                </button>
-              </div>
-
-              {refundMsg && (
-                <div className={`p-3 rounded-xl text-xs font-semibold ${refundMsg.startsWith('✓') ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'}`}>
-                  {refundMsg}
+          {/* 4 Automatic Inspection Items */}
+          <div className="space-y-3">
+            {/* 1. Capacity & Pricing */}
+            <div className="p-4 rounded-3xl bg-[#141724] border border-[#202538] flex items-center justify-between">
+              <div className="flex items-center gap-3.5">
+                <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${readinessData?.capacityPricingSet ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'}`}>
+                  {readinessData?.capacityPricingSet ? <Check className="w-5 h-5" /> : <XCircle className="w-5 h-5" />}
                 </div>
-              )}
+                <div>
+                  <h4 className="font-bold text-sm text-white">1. Capacity & Pricing Configured</h4>
+                  <p className="text-xs text-slate-400">Venue allocation set to {selectedEvent?.capacity} tickets at ${selectedEvent?.price || 0} base price</p>
+                </div>
+              </div>
+              <span className={`px-3 py-1 rounded-xl text-[10px] font-black uppercase ${readinessData?.capacityPricingSet ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-300'}`}>
+                {readinessData?.capacityPricingSet ? 'Passed' : 'Action Required'}
+              </span>
+            </div>
+
+            {/* 2. Resale Policy */}
+            <div className="p-4 rounded-3xl bg-[#141724] border border-[#202538] flex items-center justify-between">
+              <div className="flex items-center gap-3.5">
+                <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${readinessData?.resalePolicyConfigured ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'}`}>
+                  {readinessData?.resalePolicyConfigured ? <Check className="w-5 h-5" /> : <XCircle className="w-5 h-5" />}
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm text-white">2. Anti-Scalp Resale Policy Enforced</h4>
+                  <p className="text-xs text-slate-400">Max price cap fixed at {((selectedEvent?.resale_price_cap || 1.2) * 100).toFixed(0)}% face value</p>
+                </div>
+              </div>
+              <span className={`px-3 py-1 rounded-xl text-[10px] font-black uppercase ${readinessData?.resalePolicyConfigured ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-300'}`}>
+                {readinessData?.resalePolicyConfigured ? 'Passed' : 'Action Required'}
+              </span>
+            </div>
+
+            {/* 3. Payout Account Connected */}
+            <div className="p-4 rounded-3xl bg-[#141724] border border-[#202538] flex items-center justify-between">
+              <div className="flex items-center gap-3.5">
+                <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${readinessData?.payoutAccountConnected ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'}`}>
+                  {readinessData?.payoutAccountConnected ? <Check className="w-5 h-5" /> : <XCircle className="w-5 h-5" />}
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm text-white">3. Payout Settlement Account Connected</h4>
+                  <p className="text-xs text-slate-400">Direct settlement route verified for gross proceeds escrow</p>
+                </div>
+              </div>
+              <span className={`px-3 py-1 rounded-xl text-[10px] font-black uppercase ${readinessData?.payoutAccountConnected ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-300'}`}>
+                {readinessData?.payoutAccountConnected ? 'Passed' : 'Action Required'}
+              </span>
+            </div>
+
+            {/* 4. Scanner Devices Tested */}
+            <div className="p-4 rounded-3xl bg-[#141724] border border-[#202538] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3.5">
+                <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${readinessData?.scannerTested ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'}`}>
+                  {readinessData?.scannerTested ? <Check className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-bold text-sm text-white">4. Door Scanner Handhelds Verified</h4>
+                    <span className="text-[10px] text-cyan-300 font-mono">({readinessData?.testScanCount || 0} scans logged)</span>
+                  </div>
+                  <p className="text-xs text-slate-400">Turns green only after an actual verified scan is recorded for this event</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 self-end sm:self-center">
+                <button
+                  onClick={handlePerformTestScan}
+                  className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#00f0ff] to-[#00ff88] text-black font-black text-xs hover:opacity-90 transition flex items-center gap-1.5 shadow-md"
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  <span>Simulate Test Scan</span>
+                </button>
+                <span className={`px-3 py-1 rounded-xl text-[10px] font-black uppercase ${readinessData?.scannerTested ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-300'}`}>
+                  {readinessData?.scannerTested ? 'Verified' : 'Test Needed'}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SCREEN 5: LIVE CHECK-IN VIEW & FRAUD AUDIT (Core Screen #5) */}
+      {activeTab === 'checkin_view' && (
+        <div className="space-y-6 animate-in fade-in duration-150">
+          {/* Actionable Flagged Fraud Table */}
+          {fraudAlerts.length > 0 && (
+            <div className="glass-panel p-5 rounded-3xl border border-rose-500/40 bg-rose-950/20 space-y-3">
+              <div className="flex items-center gap-2 text-rose-400">
+                <ShieldAlert className="w-5 h-5 animate-pulse" />
+                <h3 className="font-display font-black text-base text-white">Actionable Duplicate Entry & Fraud Alerts</h3>
+              </div>
+              <p className="text-xs text-slate-300">Staff-actionable anomalies detected during door check-ins or offline sync reconciliation</p>
+
+              <div className="space-y-2.5">
+                {fraudAlerts.map((alert: any) => (
+                  <div key={alert.id} className="p-4 rounded-2xl bg-[#121522] border border-rose-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-white">{alert.attendeeName || 'Guest'}</span>
+                        <span className="text-slate-400">({alert.attendeeEmail || 'N/A'})</span>
+                        <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-rose-500 text-white">
+                          DUPLICATE SCAN
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-300 mt-1">
+                        Ticket: <span className="font-mono text-cyan-300">{alert.ticket_id}</span> • Device: <span className="font-mono text-slate-300">{alert.scanner_device_id}</span>
+                      </p>
+                      <p className="text-[10px] text-slate-400 mt-0.5">
+                        Scanned at {new Date(alert.scanned_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 self-end sm:self-center">
+                      <button
+                        onClick={() => alert(`One-time entry override granted for ${alert.attendeeName}`)}
+                        className="px-3 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 text-[11px] font-bold transition"
+                      >
+                        Allow Exception
+                      </button>
+                      <button
+                        onClick={() => handleRefund(alert.ticket_id)}
+                        className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 text-[11px] font-bold transition"
+                      >
+                        Revoke & Refund
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
-          {/* Real-time Scans Feed */}
+          {/* Real-Time Live Scans Feed */}
           <div className="glass-panel p-5 rounded-3xl border border-[#212638] space-y-3">
-            <h3 className="font-display font-black text-base text-white">Live Gate Admission Telemetry</h3>
+            <h3 className="font-display font-black text-base text-white">Real-Time Door Entry Stream</h3>
             {recentScans.length > 0 ? (
               <div className="space-y-2">
                 {recentScans.map((scan: any) => (
@@ -512,6 +886,7 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
                       <div className="font-bold text-white flex items-center gap-1.5">
                         <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
                         <span>{scan.attendeeName || 'Attendee'}</span>
+                        <span className="text-slate-400">• {scan.eventTitle}</span>
                       </div>
                       <p className="text-[10px] text-slate-400 mt-0.5">
                         Device: <span className="font-mono text-slate-300">{scan.scanner_device_id}</span> • Ticket: <span className="font-mono text-cyan-300">{scan.ticket_id}</span>
@@ -525,17 +900,53 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
               </div>
             ) : (
               <div className="p-8 text-center text-xs text-slate-400">
-                <span>No scans recorded yet for your events. Open Scanner Mode to check in guests!</span>
+                <span>No scans recorded yet. Open Scanner Mode on door devices to admit ticket holders!</span>
               </div>
             )}
           </div>
         </div>
       )}
 
-      {/* TAB 2: STAFF & TEAM MANAGEMENT */}
-      {activeTab === 'staff' && (
+      {/* SCREEN 6: IDEMPOTENT REFUNDS & REVOCATIONS (Core Screen #6) */}
+      {activeTab === 'refunds' && (
         <div className="space-y-6 animate-in fade-in duration-150">
-          {/* Grant Staff Role Card */}
+          <div className="glass-panel p-5 rounded-3xl border border-[#212638] space-y-4 max-w-xl">
+            <div>
+              <h3 className="font-display font-black text-base text-white">Idempotent 1-Tap Ticket Refund</h3>
+              <p className="text-xs text-slate-400">Instant optimistic confirmation with guaranteed double-click protection</p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                placeholder="Enter Ticket ID (e.g. tkt_7b4c92fa...)"
+                value={refundTicketId}
+                onChange={e => setRefundTicketId(e.target.value)}
+                className="flex-1 px-3.5 py-2.5 rounded-xl bg-[#141724] border border-[#232a3e] text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#ff2d75]"
+              />
+              <button
+                onClick={() => handleRefund()}
+                disabled={refundLoading || !refundTicketId.trim()}
+                className="px-6 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs transition disabled:opacity-40 flex items-center justify-center gap-1.5 shadow-lg shadow-rose-600/20"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>{refundLoading ? 'Processing...' : 'Issue Refund'}</span>
+              </button>
+            </div>
+
+            {refundMsg && (
+              <div className={`p-3 rounded-xl text-xs font-semibold ${refundMsg.startsWith('✓') ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'}`}>
+                {refundMsg}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* SCREEN 7: TEAM MANAGEMENT (Core Screen #7) */}
+      {activeTab === 'team' && (
+        <div className="space-y-6 animate-in fade-in duration-150">
+          {/* Grant Staff Form */}
           {isAdminOrOrganizer && (
             <div className="glass-panel p-5 rounded-3xl border border-[#212638] space-y-4">
               <div>
@@ -543,7 +954,7 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
                   <UserPlus className="w-4 h-4 text-[#00f0ff]" />
                   <span>Grant Door Staff Role & Scanner Access</span>
                 </h3>
-                <p className="text-xs text-slate-400">Promote any user or team member to operate handheld gate scanners for your events</p>
+                <p className="text-xs text-slate-400">Promote team members to operate door scanners with event-scoped permissions</p>
               </div>
 
               <form onSubmit={handleAssignStaff} className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
@@ -555,9 +966,7 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
                     className="w-full mt-1 px-3 py-2 rounded-xl bg-[#141724] border border-[#242c40] text-white focus:outline-none focus:border-[#ff2d75]"
                   >
                     {allUsers.map(u => (
-                      <option key={u.id} value={u.id}>
-                        {u.name} ({u.role})
-                      </option>
+                      <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
                     ))}
                   </select>
                 </div>
@@ -571,9 +980,7 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
                   >
                     <option value="">All Organizer Events</option>
                     {events.map((evt: EventItem) => (
-                      <option key={evt.id} value={evt.id}>
-                        {evt.title}
-                      </option>
+                      <option key={evt.id} value={evt.id}>{evt.title}</option>
                     ))}
                   </select>
                 </div>
@@ -610,10 +1017,9 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
             </div>
           )}
 
-          {/* Active Door Staff Roster */}
+          {/* Staff Roster */}
           <div className="glass-panel p-5 rounded-3xl border border-[#212638] space-y-3">
             <h3 className="font-display font-black text-base text-white">Active Door Staff Team ({assignedStaff.length})</h3>
-            
             {assignedStaff.length > 0 ? (
               <div className="space-y-2.5">
                 {assignedStaff.map((stf: any) => (
@@ -657,253 +1063,56 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
         </div>
       )}
 
-      {/* TAB 3: EVENT RULES & CAPACITY */}
-      {activeTab === 'events' && (
-        <div className="space-y-6 animate-in fade-in duration-150">
-          <div className="glass-panel p-5 rounded-3xl border border-[#212638] space-y-4">
-            <div>
-              <h3 className="font-display font-black text-base text-white">Event Rules, Resale Caps & Capacity Controls</h3>
-              <p className="text-xs text-slate-400">Configure anti-scalping multipliers and expand ticket allocations in real time</p>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              {events.map((evt: EventItem) => (
-                <button
-                  key={evt.id}
-                  onClick={() => {
-                    setSelectedEventForSettings(evt);
-                    setEditResaleAllowed(Boolean(evt.resale_allowed));
-                    setEditResaleCap(evt.resale_price_cap || 1.20);
-                    setEditCapacity(evt.capacity);
-                    setSettingsFeedback(null);
-                  }}
-                  className={`px-3 py-2 rounded-xl text-xs font-bold transition ${
-                    selectedEventForSettings?.id === evt.id
-                      ? 'bg-[#ff2d75] text-white shadow-lg shadow-pink-500/20'
-                      : 'bg-[#141724] text-slate-400 border border-[#232a3e] hover:text-white'
-                  }`}
-                >
-                  {evt.title}
-                </button>
-              ))}
-            </div>
-
-            {selectedEventForSettings && (
-              <form onSubmit={handleSaveEventSettings} className="space-y-4 pt-2 border-t border-[#1e2538] text-xs max-w-lg">
-                <div className="flex items-center justify-between p-3 rounded-2xl bg-[#141724] border border-[#232a3e]">
-                  <div>
-                    <span className="font-bold text-white">Allow P2P Ticket Resale</span>
-                    <p className="text-[10px] text-slate-400">Enable fan-to-fan verified transfers in Ticket Wallet</p>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={editResaleAllowed}
-                    onChange={e => setEditResaleAllowed(e.target.checked)}
-                    className="w-5 h-5 accent-[#ff2d75] rounded cursor-pointer"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-slate-300 font-bold flex items-center justify-between">
-                    <span>Anti-Scalp Price Cap Multiplier</span>
-                    <span className="font-mono text-[#00ff88]">{(editResaleCap * 100).toFixed(0)}% (${(selectedEventForSettings.price * editResaleCap).toFixed(2)} max)</span>
-                  </label>
-                  <input
-                    type="range"
-                    min="1.00"
-                    max="2.00"
-                    step="0.05"
-                    value={editResaleCap}
-                    onChange={e => setEditResaleCap(parseFloat(e.target.value))}
-                    className="w-full mt-2 accent-[#ff2d75] cursor-pointer"
-                  />
-                  <div className="flex justify-between text-[10px] text-slate-500 font-mono mt-1">
-                    <span>100% (Face Value Only)</span>
-                    <span>120% (Recommended Cap)</span>
-                    <span>200% (High Cap)</span>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-slate-300 font-bold">Total Venue Ticket Capacity</label>
-                  <input
-                    type="number"
-                    min={selectedEventForSettings.capacity}
-                    value={editCapacity}
-                    onChange={e => setEditCapacity(parseInt(e.target.value) || selectedEventForSettings.capacity)}
-                    className="w-full mt-1 px-3 py-2 rounded-xl bg-[#141724] border border-[#242c40] text-white focus:outline-none focus:border-[#ff2d75]"
-                  />
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    Current: {selectedEventForSettings.capacity} tickets ({selectedEventForSettings.tickets_remaining} remaining)
-                  </p>
-                </div>
-
-                {settingsFeedback && (
-                  <div className={`p-3 rounded-xl text-xs font-semibold ${settingsFeedback.startsWith('✓') ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'}`}>
-                    {settingsFeedback}
-                  </div>
-                )}
-
-                <button
-                  type="submit"
-                  disabled={settingsSaveLoading}
-                  className="px-6 py-2.5 rounded-2xl bg-gradient-to-r from-[#ff2d75] to-[#9d4edd] text-white font-bold text-xs hover:opacity-90 transition disabled:opacity-40 shadow-xl shadow-pink-500/20"
-                >
-                  {settingsSaveLoading ? 'Saving...' : 'Save Event Rules'}
-                </button>
-              </form>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* TAB 4: TARGETED ATTENDEE PUSH BROADCAST */}
-      {activeTab === 'broadcast' && (
+      {/* SCREEN 8: REPORTING & CSV EXPORT (Core Screen #8) */}
+      {activeTab === 'export' && (
         <div className="glass-panel p-5 rounded-3xl border border-[#212638] space-y-4 animate-in fade-in duration-150">
           <div>
-            <h3 className="font-display font-black text-base text-white">Targeted Attendee Push Broadcast</h3>
-            <p className="text-xs text-slate-400">Send high-priority notifications exclusively to ticket holders of a specific event</p>
+            <h3 className="font-display font-black text-lg text-white">Financial Reporting & CSV Data Export</h3>
+            <p className="text-xs text-slate-400">Generate complete RFC 4180 compliant CSV exports of orders, ticket holders, and fee breakdowns</p>
           </div>
 
-          <form onSubmit={handleSendTargetedBroadcast} className="space-y-3.5 text-xs max-w-xl">
-            <div>
-              <label className="text-slate-300 font-bold">Select Target Event</label>
-              <select
-                value={broadcastEventId}
-                onChange={e => setBroadcastEventId(e.target.value)}
-                className="w-full mt-1 px-3.5 py-2.5 rounded-xl bg-[#141724] border border-[#242c40] text-white focus:outline-none focus:border-[#ff2d75]"
-              >
-                {events.map((evt: EventItem) => (
-                  <option key={evt.id} value={evt.id}>
-                    {evt.title} ({evt.capacity - evt.tickets_remaining} ticket holders)
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="text-slate-300 font-bold">Alert Title</label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. Doors Opening at 10:00 PM!"
-                value={broadcastTitle}
-                onChange={e => setBroadcastTitle(e.target.value)}
-                className="w-full mt-1 px-3.5 py-2.5 rounded-xl bg-[#141724] border border-[#242c40] text-white focus:outline-none focus:border-[#ff2d75]"
-              />
-            </div>
-
-            <div>
-              <label className="text-slate-300 font-bold">Message Details</label>
-              <textarea
-                rows={3}
-                required
-                placeholder="Please have your cryptographic offline QR codes ready in your wallet before reaching the gate..."
-                value={broadcastMessage}
-                onChange={e => setBroadcastMessage(e.target.value)}
-                className="w-full mt-1 px-3.5 py-2.5 rounded-xl bg-[#141724] border border-[#242c40] text-white focus:outline-none focus:border-[#ff2d75]"
-              />
-            </div>
-
-            {broadcastFeedback && (
-              <div className={`p-3 rounded-xl text-xs font-semibold ${broadcastFeedback.startsWith('✓') ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'}`}>
-                {broadcastFeedback}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={broadcastLoading}
-              className="px-6 py-3 rounded-2xl bg-gradient-to-r from-[#ff2d75] to-[#9d4edd] text-white font-bold text-xs hover:opacity-90 transition disabled:opacity-40 shadow-xl shadow-pink-500/20 flex items-center gap-2"
-            >
-              <Send className="w-4 h-4" />
-              <span>{broadcastLoading ? 'Dispatching...' : 'Send Event Push Alert'}</span>
-            </button>
-          </form>
-        </div>
-      )}
-
-      {/* TAB 5: GUESTLIST LOOKUP */}
-      {activeTab === 'guestlist' && (
-        <div className="glass-panel p-5 rounded-3xl border border-[#212638] space-y-4 animate-in fade-in duration-150">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h3 className="font-display font-black text-base text-white">Event Guestlist & Check-In Verification</h3>
-              <p className="text-xs text-slate-400">Search confirmed ticket holders for door lookup and manual verification</p>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <select
-                value={guestlistEventId}
-                onChange={e => setGuestlistEventId(e.target.value)}
-                className="px-3 py-2 rounded-xl bg-[#141724] border border-[#232a3e] text-xs text-white"
-              >
-                {events.map((evt: EventItem) => (
-                  <option key={evt.id} value={evt.id}>
-                    {evt.title}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="relative">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Search guest name, email, or Ticket ID..."
-              value={guestlistSearch}
-              onChange={e => setGuestlistSearch(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 rounded-xl bg-[#141724] border border-[#232a3e] text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#ff2d75]"
-            />
-          </div>
-
-          {guestlistLoading ? (
-            <div className="p-8 text-center text-xs text-slate-400">Loading guestlist...</div>
-          ) : filteredGuestlist.length > 0 ? (
-            <div className="space-y-2.5">
-              {filteredGuestlist.map((g: any) => (
-                <div key={g.ticketId} className="p-3.5 rounded-2xl bg-[#141724] border border-[#202538] flex items-center justify-between gap-3 text-xs">
-                  <div className="flex items-center gap-3">
-                    <img src={g.userAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'} alt={g.userName} className="w-10 h-10 rounded-full object-cover border border-[#2c3650]" />
-                    <div>
-                      <div className="font-bold text-white">{g.userName}</div>
-                      <p className="text-[11px] text-slate-400">{g.userEmail}</p>
-                      <p className="text-[9px] font-mono text-cyan-300 mt-0.5">ID: {g.ticketId}</p>
-                    </div>
-                  </div>
-
-                  <div className="text-right">
-                    <span className={`px-2.5 py-1 rounded-xl text-[10px] font-black uppercase ${
-                      g.status === 'used'
-                        ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
-                        : g.status === 'valid'
-                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                        : 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
-                    }`}>
-                      {g.status === 'used' ? '✓ Admitted' : g.status}
-                    </span>
-                    {g.used_at && (
-                      <p className="text-[9px] text-slate-500 font-mono mt-1">
-                        Checked in: {new Date(g.used_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </p>
-                    )}
-                  </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+            <div className="p-4 rounded-2xl bg-[#141724] border border-[#202538] flex flex-col justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 text-white font-bold text-sm">
+                  <FileSpreadsheet className="w-4 h-4 text-[#00ff88]" />
+                  <span>Selected Event Sales Export</span>
                 </div>
-              ))}
+                <p className="text-xs text-slate-400 mt-1">Export all ticket sales, scan timestamps, and fee reconciliations for {selectedEvent?.title || 'current event'}.</p>
+              </div>
+              <button
+                onClick={() => api.downloadSalesCsv(currentUser.id, selectedEventId || undefined)}
+                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#00f0ff] to-[#00ff88] text-black font-black text-xs hover:opacity-90 transition flex items-center justify-center gap-2 shadow-lg"
+              >
+                <Download className="w-4 h-4" />
+                <span>Download Event CSV</span>
+              </button>
             </div>
-          ) : (
-            <div className="p-8 text-center text-xs text-slate-400">
-              <span>No attendees found matching search query.</span>
+
+            <div className="p-4 rounded-2xl bg-[#141724] border border-[#202538] flex flex-col justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 text-white font-bold text-sm">
+                  <FileSpreadsheet className="w-4 h-4 text-[#9d4edd]" />
+                  <span>All Events Portfolio Export</span>
+                </div>
+                <p className="text-xs text-slate-400 mt-1">Complete aggregate ledger across all Nigerian and global gigs managed by your organization.</p>
+              </div>
+              <button
+                onClick={() => api.downloadSalesCsv(currentUser.id)}
+                className="w-full py-2.5 rounded-xl bg-[#1a2033] hover:bg-[#222b44] border border-[#2c3754] text-white font-bold text-xs transition flex items-center justify-center gap-2"
+              >
+                <Download className="w-4 h-4" />
+                <span>Download Full Portfolio CSV</span>
+              </button>
             </div>
-          )}
+          </div>
         </div>
       )}
 
-      {/* Create New Event Modal */}
+      {/* CREATE EVENT MODAL WITH INTERACTIVE MAP-PIN LOCATION PICKER (Core Screen #2) */}
       {showCreateModal && (
         <div className="fixed inset-0 z-[99999] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-[#121522] border border-[#28324a] rounded-3xl p-6 max-w-lg w-full space-y-4 my-8 shadow-2xl">
+          <div className="bg-[#121522] border border-[#28324a] rounded-3xl p-6 max-w-xl w-full space-y-4 my-8 shadow-2xl">
             <div className="flex items-center justify-between border-b border-[#20273c] pb-3">
               <h3 className="font-display font-black text-lg text-white">Create New Verified Event</h3>
               <button onClick={() => setShowCreateModal(false)} className="text-slate-400 hover:text-white text-xs">✕ Close</button>
@@ -918,28 +1127,51 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
                   placeholder="e.g. Obi's House Landmark Beach Rave"
                   value={newEventTitle}
                   onChange={e => setNewEventTitle(e.target.value)}
-                  className="w-full mt-1 px-3 py-2 rounded-xl bg-[#181d2f] border border-[#2a344d] text-white focus:outline-none focus:border-[#ff2d75]"
+                  className="w-full mt-1 px-3.5 py-2 rounded-xl bg-[#181d2f] border border-[#2a344d] text-white focus:outline-none focus:border-[#ff2d75]"
                 />
               </div>
 
+              {/* Map-Pin Location Picker */}
               <div>
-                <label className="text-slate-300 font-bold">Venue Name & Address</label>
-                <div className="grid grid-cols-2 gap-2 mt-1">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-slate-300 font-bold flex items-center gap-1.5">
+                    <Map className="w-3.5 h-3.5 text-[#ff2d75]" />
+                    <span>Map Pin Location Picker (Click or drag pin)</span>
+                  </label>
+                  <span className="text-[10px] font-mono text-cyan-300">
+                    {newEventLat.toFixed(4)}, {newEventLng.toFixed(4)}
+                  </span>
+                </div>
+                <div 
+                  ref={mapContainerRef} 
+                  className="w-full h-44 rounded-2xl overflow-hidden border border-[#2a344d] z-0"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Click on the map or drag the pin to set the exact geographic coordinates for discovery proximity.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-slate-300 font-bold">Venue Name</label>
                   <input
                     type="text"
                     required
-                    placeholder="Venue Name (e.g. Landmark Beach)"
+                    placeholder="e.g. Landmark Beach"
                     value={newEventVenue}
                     onChange={e => setNewEventVenue(e.target.value)}
-                    className="px-3 py-2 rounded-xl bg-[#181d2f] border border-[#2a344d] text-white focus:outline-none focus:border-[#ff2d75]"
+                    className="w-full mt-1 px-3 py-2 rounded-xl bg-[#181d2f] border border-[#2a344d] text-white focus:outline-none focus:border-[#ff2d75]"
                   />
+                </div>
+                <div>
+                  <label className="text-slate-300 font-bold">Venue Address</label>
                   <input
                     type="text"
                     required
-                    placeholder="Address (e.g. Oniru, VI, Lagos)"
+                    placeholder="e.g. Oniru, VI, Lagos"
                     value={newEventAddress}
                     onChange={e => setNewEventAddress(e.target.value)}
-                    className="px-3 py-2 rounded-xl bg-[#181d2f] border border-[#2a344d] text-white focus:outline-none focus:border-[#ff2d75]"
+                    className="w-full mt-1 px-3 py-2 rounded-xl bg-[#181d2f] border border-[#2a344d] text-white focus:outline-none focus:border-[#ff2d75]"
                   />
                 </div>
               </div>

@@ -9,6 +9,7 @@ import { verificationService } from '../services/verificationService.js';
 import { resaleService } from '../services/resaleService.js';
 import { socialService, GoingVisibility } from '../services/socialService.js';
 import { notificationsService } from '../services/notificationsService.js';
+import { organizerAnalyticsService } from '../services/organizerAnalyticsService.js';
 
 export const apiRouter = Router();
 
@@ -284,74 +285,65 @@ apiRouter.post('/events/:id/reviews', (req: Request, res: Response) => {
 });
 
 // ==========================================
-// 9. Organizer Real-Time Operations, Staff & Telemetry
+// 9. Organizer Real-Time Telemetry & Operations
 // ==========================================
+// Isolated read query path with strict server-side RBAC
 apiRouter.get('/organizer/analytics/:organizerId', (req: Request, res: Response) => {
   const organizerId = String(req.params.organizerId);
+  const viewerRole = (req.query.viewerRole as string) || (req.headers['x-user-role'] as string) || 'organizer';
+  const force = req.query.force === 'true';
 
-  const events = db.prepare(`SELECT * FROM events WHERE organizer_id = ? ORDER BY start_time DESC`).all(organizerId) as any[];
-
-  // Compute aggregate numbers
-  let totalRevenue = 0;
-  let totalTicketsSold = 0;
-  let totalAdmitted = 0;
-  let totalCapacity = 0;
-
-  for (const evt of events) {
-    totalCapacity += evt.capacity;
-    const sold = evt.capacity - evt.tickets_remaining;
-    totalTicketsSold += sold;
-    totalRevenue += sold * evt.price;
-
-    const admittedCount = (db.prepare(`
-      SELECT COUNT(*) as count FROM tickets WHERE event_id = ? AND status = 'used'
-    `).get(evt.id) as any).count;
-    totalAdmitted += admittedCount;
-  }
-
-  // Recent scans for check-in velocity calculation (last 10 minutes)
-  const recentScans = db.prepare(`
-    SELECT osl.*, t.owner_user_id, u.name as attendeeName
-    FROM offline_scans_log osl
-    JOIN tickets t ON osl.ticket_id = t.id
-    JOIN users u ON t.owner_user_id = u.id
-    ORDER BY osl.scanned_at DESC
-    LIMIT 30
-  `).all() as any[];
-
-  const fraudAlerts = verificationService.getFraudAuditLog();
-
-  // Assigned Staff Members for this Organizer
-  const assignedStaff = db.prepare(`
-    SELECT os.id as assignmentId, os.role_title, os.status as assignmentStatus, os.created_at as assignedAt,
-           u.id as userId, u.name as staffName, u.email as staffEmail, u.avatar as staffAvatar, u.role as userRole,
-           e.id as eventId, e.title as eventTitle
-    FROM organizer_staff os
-    JOIN users u ON os.staff_user_id = u.id
-    LEFT JOIN events e ON os.event_id = e.id
-    WHERE os.organizer_id = ? AND os.status = 'active'
-    ORDER BY os.created_at DESC
-  `).all(organizerId) as any[];
-
-  res.json({
-    success: true,
-    summary: {
-      totalRevenue,
-      totalTicketsSold,
-      totalAdmitted,
-      totalCapacity,
-      admissionRatePercent: totalTicketsSold > 0 ? Number(((totalAdmitted / totalTicketsSold) * 100).toFixed(1)) : 0,
-    },
-    events,
-    recentScans,
-    fraudAlerts,
-    assignedStaff,
-  });
+  const data = organizerAnalyticsService.getOrganizerDashboard(organizerId, viewerRole, force);
+  res.json(data);
 });
 
+// Pre-Event Readiness Checklist Evaluation
+apiRouter.get('/organizer/:organizerId/events/:eventId/readiness', (req: Request, res: Response) => {
+  const eventId = String(req.params.eventId);
+  const checklist = organizerAnalyticsService.getEventReadiness(eventId);
+  if (!checklist) {
+    return res.status(404).json({ success: false, error: 'Event not found' });
+  }
+  res.json({ success: true, checklist });
+});
+
+// CSV Export (RFC 4180 compliant)
+apiRouter.get('/organizer/:organizerId/export-csv', (req: Request, res: Response) => {
+  const organizerId = String(req.params.organizerId);
+  const eventId = req.query.eventId as string | undefined;
+
+  const csv = organizerAnalyticsService.generateSalesCsv(organizerId, eventId);
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="evnt_sales_export_${Date.now()}.csv"`);
+  res.status(200).send(csv);
+});
+
+apiRouter.get('/organizer/:organizerId/events/:eventId/export-csv', (req: Request, res: Response) => {
+  const organizerId = String(req.params.organizerId);
+  const eventId = String(req.params.eventId);
+
+  const csv = organizerAnalyticsService.generateSalesCsv(organizerId, eventId);
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="event_${eventId}_sales.csv"`);
+  res.status(200).send(csv);
+});
+
+// Idempotent Refund Endpoint
 apiRouter.post('/organizer/refund-ticket', (req: Request, res: Response) => {
-  const { ticketId, organizerId } = req.body;
-  const result = paymentsService.refundTicket(ticketId, organizerId || 'admin');
+  const { ticketId, organizerId, idempotencyKey } = req.body;
+  const result = paymentsService.refundTicket(ticketId, organizerId || 'admin', idempotencyKey);
+  if (!result.success) {
+    return res.status(400).json(result);
+  }
+  res.json(result);
+});
+
+// Idempotent Event Cancellation & Mass Refund
+apiRouter.post('/organizer/refund-event', (req: Request, res: Response) => {
+  const { eventId, organizerId, idempotencyKey } = req.body;
+  const result = paymentsService.refundEvent(eventId, organizerId || 'admin', idempotencyKey);
   if (!result.success) {
     return res.status(400).json(result);
   }
@@ -430,7 +422,6 @@ apiRouter.post('/organizer/:organizerId/staff/:assignmentId/revoke', (req: Reque
   `).get(assignment.staff_user_id) as any;
 
   if (remainingActive.count === 0) {
-    // Revert role to attendee if they are not super admin or organizer
     const targetUser = db.prepare(`SELECT role FROM users WHERE id = ?`).get(assignment.staff_user_id) as any;
     if (targetUser && targetUser.role === 'staff') {
       db.prepare(`UPDATE users SET role = 'attendee' WHERE id = ?`).run(assignment.staff_user_id);

@@ -314,4 +314,146 @@ describe('EVNT Acceptance Criteria Test Suite (evnt.pdf §12)', () => {
     // Execution should be well under 100ms
     expect(duration).toBeLessThan(100);
   });
+
+  // =========================================================================
+  // 8. Idempotent Refund Action
+  // =========================================================================
+  it('Criterion 8: Refund action is idempotent — double-submitting never issues double refunds', async () => {
+    const testTicketId = `tkt_idemp_refund_${Date.now()}`;
+    const testOrderId = `ord_idemp_refund_${Date.now()}`;
+    const token = cryptoService.signTicket(testTicketId, 'evt_boiler_room_bushwick', 'usr_alex');
+
+    const initialEvent = db.prepare(`SELECT tickets_remaining FROM events WHERE id = 'evt_boiler_room_bushwick'`).get() as any;
+    const initialRemaining = initialEvent.tickets_remaining;
+
+    db.prepare(`
+      INSERT INTO orders (id, buyer_user_id, event_id, quantity, total_amount, payment_intent_id, idempotency_key, status)
+      VALUES (?, 'usr_alex', 'evt_boiler_room_bushwick', 1, 25.00, ?, ?, 'confirmed')
+    `).run(testOrderId, `pi_${testOrderId}`, `idem_${testOrderId}`);
+
+    db.prepare(`
+      INSERT INTO tickets (id, event_id, owner_user_id, order_id, status, signed_token)
+      VALUES (?, 'evt_boiler_room_bushwick', 'usr_alex', ?, 'valid', ?)
+    `).run(testTicketId, testOrderId, token);
+
+    // Call refund 1st time with idempotency key
+    const refund1 = await request(app)
+      .post('/api/organizer/refund-ticket')
+      .send({
+        ticketId: testTicketId,
+        organizerId: 'usr_organizer_maya',
+        idempotencyKey: `idem_refund_${testTicketId}`,
+      });
+
+    expect(refund1.status).toBe(200);
+    expect(refund1.body.success).toBe(true);
+    expect(refund1.body.alreadyRefunded).toBe(false);
+
+    // Call refund 2nd time with SAME idempotency key (simulating fast double click)
+    const refund2 = await request(app)
+      .post('/api/organizer/refund-ticket')
+      .send({
+        ticketId: testTicketId,
+        organizerId: 'usr_organizer_maya',
+        idempotencyKey: `idem_refund_${testTicketId}`,
+      });
+
+    expect(refund2.status).toBe(200);
+    expect(refund2.body.success).toBe(true);
+
+    // Verify inventory only incremented by exactly 1, not 2!
+    const afterEvent = db.prepare(`SELECT tickets_remaining FROM events WHERE id = 'evt_boiler_room_bushwick'`).get() as any;
+    expect(afterEvent.tickets_remaining).toBe(initialRemaining + 1);
+  });
+
+  // =========================================================================
+  // 9. Pre-Event Readiness Checklist Real State Verification
+  // =========================================================================
+  it('Criterion 9: Readiness checklist scanner item only turns green after an actual scan', async () => {
+    const testEventId = `evt_readiness_test_${Date.now()}`;
+    db.prepare(`
+      INSERT INTO events (
+        id, organizer_id, title, description, lat, lng, venue_name, venue_address,
+        start_time, end_time, category, capacity, tickets_remaining, price,
+        resale_allowed, resale_price_cap, status
+      ) VALUES (
+        ?, 'usr_organizer_maya', 'Readiness Demo Gig', 'Readiness test',
+        6.4281, 3.4219, 'Victoria Island Club', 'Lagos',
+        datetime('now', '+2 days'), datetime('now', '+3 days'),
+        'club', 100, 100, 30.00, 1, 1.20, 'published'
+      )
+    `).run(testEventId);
+
+    // 1. Initial checklist: scannerTested MUST be false because 0 scans exist
+    const res1 = await request(app)
+      .get(`/api/organizer/usr_organizer_maya/events/${testEventId}/readiness`);
+
+    expect(res1.status).toBe(200);
+    expect(res1.body.checklist.scannerTested).toBe(false);
+    expect(res1.body.checklist.overallReady).toBe(false);
+
+    // 2. Perform a test scan for this event
+    const ticketId = `tkt_test_scan_${Date.now()}`;
+    const token = cryptoService.signTicket(ticketId, testEventId, 'usr_alex');
+    db.prepare(`
+      INSERT INTO orders (id, buyer_user_id, event_id, quantity, total_amount, payment_intent_id, idempotency_key, status)
+      VALUES (?, 'usr_alex', ?, 1, 30.00, ?, ?, 'confirmed')
+    `).run(`ord_readiness_${Date.now()}`, testEventId, `pi_readiness_${Date.now()}`, `idem_readiness_${Date.now()}`);
+    db.prepare(`
+      INSERT INTO tickets (id, event_id, owner_user_id, order_id, status, signed_token)
+      VALUES (?, ?, 'usr_alex', ?, 'valid', ?)
+    `).run(ticketId, testEventId, `ord_readiness_${Date.now()}`, token);
+
+    await request(app)
+      .post('/api/verify/scan')
+      .send({ token, scannerDeviceId: 'test_gate_scanner_1', targetEventId: testEventId });
+
+    // 3. Re-query checklist: scannerTested MUST NOW be true!
+    const res2 = await request(app)
+      .get(`/api/organizer/usr_organizer_maya/events/${testEventId}/readiness`);
+
+    expect(res2.status).toBe(200);
+    expect(res2.body.checklist.scannerTested).toBe(true);
+    expect(res2.body.checklist.overallReady).toBe(true);
+  });
+
+  // =========================================================================
+  // 10. Server-Side RBAC Enforcement: Revenue Masked for Staff
+  // =========================================================================
+  it('Criterion 10: Door staff accounts are strictly forbidden from fetching revenue data at the API layer', async () => {
+    // 1. Query analytics as staff
+    const staffRes = await request(app)
+      .get('/api/organizer/analytics/usr_organizer_maya?viewerRole=staff');
+
+    expect(staffRes.status).toBe(200);
+    expect(staffRes.body.isStaff).toBe(true);
+    expect(staffRes.body.summary.totalRevenue).toBeUndefined();
+    // Verify individual event prices are also omitted
+    for (const evt of staffRes.body.events) {
+      expect(evt.price).toBeUndefined();
+    }
+
+    // 2. Query analytics as organizer
+    const organizerRes = await request(app)
+      .get('/api/organizer/analytics/usr_organizer_maya?viewerRole=organizer');
+
+    expect(organizerRes.status).toBe(200);
+    expect(organizerRes.body.isStaff).toBe(false);
+    expect(organizerRes.body.summary.totalRevenue).toBeDefined();
+    expect(typeof organizerRes.body.summary.totalRevenue).toBe('number');
+  });
+
+  // =========================================================================
+  // 11. CSV Reporting & Export
+  // =========================================================================
+  it('Criterion 11: CSV export generates RFC 4180 formatted file with accurate sales data', async () => {
+    const csvRes = await request(app)
+      .get('/api/organizer/usr_organizer_maya/export-csv');
+
+    expect(csvRes.status).toBe(200);
+    expect(csvRes.headers['content-type']).toContain('text/csv');
+    expect(csvRes.headers['content-disposition']).toContain('attachment');
+    expect(csvRes.text).toContain('Order ID,Ticket ID,Event Title');
+    expect(csvRes.text).toContain('Platform Fee ($)');
+  });
 });

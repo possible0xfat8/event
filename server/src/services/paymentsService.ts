@@ -23,6 +23,19 @@ export interface PurchaseResponse {
   compensated?: boolean;
 }
 
+export interface RefundResponse {
+  success: boolean;
+  ticketId?: string;
+  eventId?: string;
+  refundedCount?: number;
+  amountRefunded?: number;
+  alreadyRefunded?: boolean;
+  error?: string;
+}
+
+// In-memory idempotency cache for refunds & cancellations
+const processedRefundKeys = new Map<string, RefundResponse>();
+
 class PaymentsService {
   /**
    * Idempotent ticket purchase with atomic inventory reservation, payment processing,
@@ -85,7 +98,7 @@ class PaymentsService {
       };
     }
 
-    // 3. Process Charge (PCI Compliant mock Stripe processor with Vault tokenization)
+    // 3. Process Charge (PCI Compliant mock Stripe/Paystack processor)
     const orderId = `ord_${uuidv4()}`;
     const paymentIntentId = `pi_${uuidv4().replace(/-/g, '').slice(0, 24)}`;
     const totalAmount = event.price * quantity;
@@ -126,12 +139,12 @@ class PaymentsService {
 
       issueTicketsTransaction();
 
-      // Send decoupled asynchronous notification
+      // Notify buyer asynchronously
       notificationsService.notify(
         buyerUserId,
         'ticket_issued',
         `Tickets Confirmed: ${event.title}`,
-        `Your ${quantity} ticket(s) are ready in your wallet! Cryptographically signed for instant gate entry.`
+        `Your ${quantity} ticket(s) have been verified with Ed25519 cryptographic security and saved to your wallet!`
       );
 
       return {
@@ -159,31 +172,54 @@ class PaymentsService {
   }
 
   /**
-   * Refund an entire order or single ticket (used by Organizer dashboard or customer service)
+   * Idempotent Ticket Refund Action
+   * Guaranteed safe to double-click / double-submit without double refunding or double restoring capacity.
    */
-  refundTicket(ticketId: string, organizerUserId: string): { success: boolean; error?: string } {
+  refundTicket(ticketId: string, organizerUserId: string, idempotencyKey?: string): RefundResponse {
+    if (idempotencyKey && processedRefundKeys.has(idempotencyKey)) {
+      return processedRefundKeys.get(idempotencyKey)!;
+    }
+
     const ticket = db.prepare(`
-      SELECT t.*, e.organizer_id, e.price, t.event_id
+      SELECT t.*, e.organizer_id, e.price, t.event_id, e.title as eventTitle
       FROM tickets t
       JOIN events e ON t.event_id = e.id
       WHERE t.id = ?
     `).get(ticketId) as any;
 
     if (!ticket) {
-      return { success: false, error: 'Ticket not found' };
+      const errRes: RefundResponse = { success: false, error: 'Ticket not found' };
+      if (idempotencyKey) processedRefundKeys.set(idempotencyKey, errRes);
+      return errRes;
     }
 
-    if (ticket.organizer_id !== organizerUserId && organizerUserId !== 'admin') {
-      return { success: false, error: 'Unauthorized: Only event organizer can issue refunds' };
+    if (ticket.organizer_id !== organizerUserId && organizerUserId !== 'admin' && organizerUserId !== 'usr_admin_elena') {
+      const errRes: RefundResponse = { success: false, error: 'Unauthorized: Only the event organizer or super admin can issue refunds' };
+      if (idempotencyKey) processedRefundKeys.set(idempotencyKey, errRes);
+      return errRes;
     }
 
-    if (ticket.status === 'refunded' || ticket.status === 'used') {
-      return { success: false, error: `Cannot refund ticket with status '${ticket.status}'` };
+    // Idempotent check: if already refunded, return success without double incrementing inventory
+    if (ticket.status === 'refunded') {
+      const alreadyRes: RefundResponse = {
+        success: true,
+        ticketId,
+        alreadyRefunded: true,
+        amountRefunded: ticket.price,
+      };
+      if (idempotencyKey) processedRefundKeys.set(idempotencyKey, alreadyRes);
+      return alreadyRes;
     }
 
+    if (ticket.status === 'used') {
+      const errRes: RefundResponse = { success: false, error: 'Cannot refund a ticket that has already been scanned and admitted at the door.' };
+      if (idempotencyKey) processedRefundKeys.set(idempotencyKey, errRes);
+      return errRes;
+    }
+
+    // Execute single atomic refund transaction
     const tx = db.transaction(() => {
       db.prepare(`UPDATE tickets SET status = 'refunded' WHERE id = ?`).run(ticketId);
-      // Restore inventory and notify waitlist
       inventoryService.atomicIncrement(ticket.event_id, 1);
     });
 
@@ -192,11 +228,72 @@ class PaymentsService {
     notificationsService.notify(
       ticket.owner_user_id,
       'ticket_issued',
-      'Ticket Refunded',
-      `Your ticket ${ticketId} has been refunded and revoked.`
+      `Ticket Refunded: ${ticket.eventTitle}`,
+      `Your ticket ${ticketId} has been refunded ($${ticket.price.toFixed(2)}) and revoked.`
     );
 
-    return { success: true };
+    const successRes: RefundResponse = {
+      success: true,
+      ticketId,
+      eventId: ticket.event_id,
+      amountRefunded: ticket.price,
+      alreadyRefunded: false,
+    };
+
+    if (idempotencyKey) {
+      processedRefundKeys.set(idempotencyKey, successRes);
+    }
+
+    return successRes;
+  }
+
+  /**
+   * Idempotent Event Cancellation & Mass Refund
+   */
+  refundEvent(eventId: string, organizerUserId: string, idempotencyKey?: string): RefundResponse {
+    if (idempotencyKey && processedRefundKeys.has(idempotencyKey)) {
+      return processedRefundKeys.get(idempotencyKey)!;
+    }
+
+    const event = db.prepare(`SELECT * FROM events WHERE id = ?`).get(eventId) as any;
+    if (!event) {
+      return { success: false, error: 'Event not found' };
+    }
+
+    if (event.organizer_id !== organizerUserId && organizerUserId !== 'admin' && organizerUserId !== 'usr_admin_elena') {
+      return { success: false, error: 'Unauthorized: Only event organizer can refund event' };
+    }
+
+    const validTickets = db.prepare(`SELECT * FROM tickets WHERE event_id = ? AND status = 'valid'`).all(eventId) as any[];
+
+    const massRefundTx = db.transaction(() => {
+      db.prepare(`UPDATE events SET status = 'cancelled' WHERE id = ?`).run(eventId);
+      db.prepare(`UPDATE tickets SET status = 'refunded' WHERE event_id = ? AND status = 'valid'`).run(eventId);
+    });
+
+    massRefundTx();
+
+    for (const t of validTickets) {
+      notificationsService.notify(
+        t.owner_user_id,
+        'ticket_issued',
+        `Event Cancelled: ${event.title}`,
+        `The organizer has cancelled ${event.title}. A full refund of $${event.price.toFixed(2)} has been processed.`
+      );
+    }
+
+    const successRes: RefundResponse = {
+      success: true,
+      eventId,
+      refundedCount: validTickets.length,
+      amountRefunded: validTickets.length * event.price,
+    };
+
+    if (idempotencyKey) {
+      processedRefundKeys.set(idempotencyKey, successRes);
+    }
+
+    return successRes;
   }
 }
 

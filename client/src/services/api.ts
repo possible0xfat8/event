@@ -172,17 +172,31 @@ export const api = {
     return await res.json();
   },
 
-  // Organizer Analytics, Staff, Broadcast & Settings
-  async getOrganizerAnalytics(organizerId: string) {
-    const res = await fetch(`${API_BASE}/organizer/analytics/${organizerId}`);
+  // Organizer Analytics, Staff, Broadcast, Readiness & CSV Export
+  async getOrganizerAnalytics(organizerId: string, viewerRole: string = 'organizer', force: boolean = false) {
+    const res = await fetch(`${API_BASE}/organizer/analytics/${organizerId}?viewerRole=${viewerRole}${force ? '&force=true' : ''}`);
     return await res.json();
   },
 
-  async refundTicket(ticketId: string, organizerId: string) {
+  async getEventReadiness(organizerId: string, eventId: string) {
+    const res = await fetch(`${API_BASE}/organizer/${organizerId}/events/${eventId}/readiness`);
+    return await res.json();
+  },
+
+  async refundTicket(ticketId: string, organizerId: string, idempotencyKey?: string) {
     const res = await fetch(`${API_BASE}/organizer/refund-ticket`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ticketId, organizerId }),
+      body: JSON.stringify({ ticketId, organizerId, idempotencyKey }),
+    });
+    return await res.json();
+  },
+
+  async refundEvent(eventId: string, organizerId: string, idempotencyKey?: string) {
+    const res = await fetch(`${API_BASE}/organizer/refund-event`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ eventId, organizerId, idempotencyKey }),
     });
     return await res.json();
   },
@@ -224,6 +238,14 @@ export const api = {
   async getEventGuestlist(organizerId: string, eventId: string) {
     const res = await fetch(`${API_BASE}/organizer/${organizerId}/events/${eventId}/guestlist`);
     return await res.json();
+  },
+
+  // CSV Export helper (triggers browser file download)
+  downloadSalesCsv(organizerId: string, eventId?: string) {
+    const url = eventId 
+      ? `${API_BASE}/organizer/${organizerId}/events/${eventId}/export-csv`
+      : `${API_BASE}/organizer/${organizerId}/export-csv`;
+    window.open(url, '_blank');
   },
 
   // Super Admin API
