@@ -70,8 +70,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="relative w-full max-w-md bg-[#10131e] border border-[#262c42] rounded-3xl p-6 shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+    <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+      <div className="relative w-full max-w-md bg-[#10131e] border border-[#262c42] rounded-3xl p-6 shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 z-[100000]">
         {/* Glow Accent */}
         <div className="absolute -top-20 -right-20 w-40 h-40 rounded-full bg-[#ff2d75]/20 blur-3xl pointer-events-none" />
 

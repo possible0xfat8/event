@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { TicketItem, User } from '../types';
 import { api } from '../services/api';
 import { QRCodeSVG } from 'qrcode.react';
-import { ShieldCheck, RefreshCw, ArrowRightLeft, Clock, MapPin, Sparkles, CheckCircle, Ban, AlertCircle, X } from 'lucide-react';
+import { ShieldCheck, RefreshCw, ArrowRightLeft, MapPin, CheckCircle, Ban, AlertCircle, X } from 'lucide-react';
 
 interface TicketWalletProps {
   tickets: TicketItem[];
@@ -41,7 +41,6 @@ export const TicketWallet: React.FC<TicketWalletProps> = ({
     setResaleModalTicket(ticket);
     const maxPrice = Number(((ticket.originalPrice || 25) * (ticket.resalePriceCap || 1.2)).toFixed(2));
     setResalePrice(ticket.originalPrice || 25);
-    // Default to first user that isn't current user
     const otherUser = users.find(u => u.id !== currentUser.id);
     if (otherUser) setResaleBuyerId(otherUser.id);
     setResaleError(null);
@@ -154,7 +153,7 @@ export const TicketWallet: React.FC<TicketWalletProps> = ({
                 />
               </div>
 
-              {/* Live Security Nonce Watermark (evnt.pdf §11 - Prevents Screenshot Replay) */}
+              {/* Live Security Nonce Watermark */}
               <div className="w-full flex items-center justify-between text-[10px] font-mono font-bold text-slate-700 pt-1 border-t border-slate-200">
                 <div className="flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
@@ -178,7 +177,7 @@ export const TicketWallet: React.FC<TicketWalletProps> = ({
               </div>
             </div>
 
-            {/* Frictionless 1-Tap Resale Action (evnt.pdf §10.3) */}
+            {/* Frictionless 1-Tap Resale Action */}
             {ticket.resaleAllowed ? (
               <button
                 onClick={() => openResaleModal(ticket)}
@@ -215,8 +214,8 @@ export const TicketWallet: React.FC<TicketWalletProps> = ({
 
       {/* Resale Modal (evnt.pdf §8) */}
       {resaleModalTicket && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-150">
-          <div className="relative w-full max-w-md bg-[#10131e] border border-[#262c42] rounded-3xl p-6 shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-150">
+          <div className="relative w-full max-w-md bg-[#10131e] border border-[#262c42] rounded-3xl p-6 shadow-2xl space-y-4 z-[100000]">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-xl bg-pink-500/20 text-[#ff2d75] flex items-center justify-center">

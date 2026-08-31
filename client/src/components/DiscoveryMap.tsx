@@ -104,7 +104,7 @@ export const DiscoveryMap: React.FC<DiscoveryMapProps> = ({
       : '';
 
     const html = `
-      <div class="relative flex items-center justify-center cursor-pointer transform transition-transform duration-200 ${isSelected ? 'scale-125 z-50' : 'hover:scale-110'}">
+      <div class="relative flex items-center justify-center cursor-pointer transform transition-transform duration-200 ${isSelected ? 'scale-125 z-30' : 'hover:scale-110'}">
         ${pulseRing}
         <div class="w-8 h-8 rounded-full bg-gradient-to-tr ${bgGradient} p-0.5 shadow-xl shadow-black/80 flex items-center justify-center border border-white/60">
           <div class="w-full h-full rounded-full bg-[#0d101a] flex items-center justify-center text-white font-bold text-[10px]">
@@ -124,9 +124,9 @@ export const DiscoveryMap: React.FC<DiscoveryMapProps> = ({
   };
 
   return (
-    <div className="relative w-full h-[calc(100vh-125px)] flex flex-col overflow-hidden bg-[#090a0f]">
+    <div className="relative w-full h-[calc(100vh-125px)] flex flex-col overflow-hidden bg-[#090a0f] z-0 isolate">
       {/* Top Floating Search & Category Filter Bar */}
-      <div className="absolute top-3 left-3 right-3 z-[1000] flex flex-col gap-2 max-w-2xl mx-auto">
+      <div className="absolute top-3 left-3 right-3 z-20 flex flex-col gap-2 max-w-2xl mx-auto pointer-events-auto">
         <div className="flex items-center gap-2">
           <form onSubmit={handleSearchSubmit} className="flex-1 relative">
             <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -204,7 +204,7 @@ export const DiscoveryMap: React.FC<DiscoveryMapProps> = ({
       {/* Floating GPS Re-Center Button */}
       <button
         onClick={onDetectLiveLocation}
-        className="absolute bottom-28 right-4 z-[1000] p-3 rounded-full bg-[#12141e]/90 backdrop-blur-xl border border-[#00f0ff]/50 text-[#00f0ff] hover:scale-110 shadow-2xl shadow-cyan-500/30 transition-all"
+        className="absolute bottom-28 right-4 z-20 p-3 rounded-full bg-[#12141e]/90 backdrop-blur-xl border border-[#00f0ff]/50 text-[#00f0ff] hover:scale-110 shadow-2xl shadow-cyan-500/30 transition-all"
         title="Center on My Location (GPS)"
       >
         <Crosshair className="w-5 h-5 animate-pulse" />
@@ -212,12 +212,12 @@ export const DiscoveryMap: React.FC<DiscoveryMapProps> = ({
 
       {/* Main Map View */}
       {viewMode === 'map' ? (
-        <div className="w-full h-full relative">
+        <div className="w-full h-full relative z-0">
           <MapContainer
             center={centerCoordinates}
             zoom={13}
             zoomControl={false}
-            className="w-full h-full"
+            className="w-full h-full z-0"
           >
             <TileLayer
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -282,7 +282,7 @@ export const DiscoveryMap: React.FC<DiscoveryMapProps> = ({
 
           {/* Bottom Floating Event Preview Card on Map */}
           {selectedEvent && (
-            <div className="absolute bottom-4 left-3 right-3 z-[1000] max-w-md mx-auto">
+            <div className="absolute bottom-4 left-3 right-3 z-20 max-w-md mx-auto">
               <div
                 onClick={() => onOpenDetails(selectedEvent)}
                 className="glass-panel-glow rounded-3xl p-3.5 flex items-center gap-3.5 shadow-2xl cursor-pointer hover:scale-[1.02] transition-transform animate-in slide-in-from-bottom-6 duration-200"
@@ -342,7 +342,7 @@ export const DiscoveryMap: React.FC<DiscoveryMapProps> = ({
         </div>
       ) : (
         /* List Mode View */
-        <div className="flex-1 overflow-y-auto pt-24 px-4 pb-20 max-w-3xl mx-auto w-full space-y-3">
+        <div className="flex-1 overflow-y-auto pt-24 px-4 pb-20 max-w-3xl mx-auto w-full space-y-3 z-10">
           <div className="flex items-center justify-between text-xs text-slate-400 px-1">
             <span>Showing {events.length} nearby events</span>
             <span>Sorted by distance</span>

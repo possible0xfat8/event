@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { EventItem, User } from '../types';
 import { api } from '../services/api';
-import { X, MapPin, Clock, ShieldCheck, Users, Eye, Sparkles, AlertCircle, Heart, Flame, ThumbsUp, Send } from 'lucide-react';
+import { X, MapPin, Clock, ShieldCheck, Users, Eye, Sparkles, Send } from 'lucide-react';
 
 interface EventDetailModalProps {
   event: EventItem;
@@ -82,8 +82,8 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
   const capacityPercent = Math.min(100, Math.round(((event.capacity - event.tickets_remaining) / event.capacity) * 100));
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="relative w-full max-w-lg bg-[#0e111a] border border-[#212638] sm:rounded-3xl rounded-t-3xl shadow-2xl max-h-[90vh] flex flex-col overflow-hidden animate-in slide-in-from-bottom-8 duration-200">
+    <div className="fixed inset-0 z-[99999] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+      <div className="relative w-full max-w-lg bg-[#0e111a] border border-[#212638] sm:rounded-3xl rounded-t-3xl shadow-2xl max-h-[90vh] flex flex-col overflow-hidden animate-in slide-in-from-bottom-8 duration-200 z-[100000]">
         {/* Cover Photo & Floating Close */}
         <div className="relative h-56 w-full flex-shrink-0">
           <img src={event.image_url} alt={event.title} className="w-full h-full object-cover" />

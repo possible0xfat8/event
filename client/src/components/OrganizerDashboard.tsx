@@ -24,8 +24,8 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
   const [newEventDesc, setNewEventDesc] = useState('');
   const [newEventVenue, setNewEventVenue] = useState('');
   const [newEventAddress, setNewEventAddress] = useState('');
-  const [newEventLat, setNewEventLat] = useState(40.7128);
-  const [newEventLng, setNewEventLng] = useState(-73.9352);
+  const [newEventLat, setNewEventLat] = useState(6.4281);
+  const [newEventLng, setNewEventLng] = useState(3.4219);
   const [newEventCapacity, setNewEventCapacity] = useState(150);
   const [newEventPrice, setNewEventPrice] = useState(25.00);
   const [newEventCategory, setNewEventCategory] = useState<'club' | 'gig' | 'popup' | 'art' | 'rooftop'>('club');
@@ -280,8 +280,8 @@ export const OrganizerDashboard: React.FC<OrganizerDashboardProps> = ({
 
       {/* Modal: Create Event */}
       {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-150">
-          <div className="relative w-full max-w-lg bg-[#10131e] border border-[#262c42] rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-150">
+          <div className="relative w-full max-w-lg bg-[#10131e] border border-[#262c42] rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto z-[100000]">
             <h3 className="font-display font-black text-xl text-white">Create Verified Event</h3>
 
             <form onSubmit={handleCreateEvent} className="space-y-3.5 text-xs">

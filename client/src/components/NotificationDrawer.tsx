@@ -30,8 +30,8 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/70 backdrop-blur-sm animate-in fade-in duration-150">
-      <div className="w-full max-w-sm h-full bg-[#10131e] border-l border-[#212638] shadow-2xl p-5 flex flex-col gap-4 animate-in slide-in-from-right duration-200">
+    <div className="fixed inset-0 z-[99999] flex justify-end bg-black/80 backdrop-blur-md animate-in fade-in duration-150">
+      <div className="w-full max-w-sm h-full bg-[#10131e] border-l border-[#212638] shadow-2xl p-5 flex flex-col gap-4 animate-in slide-in-from-right duration-200 z-[100000]">
         <div className="flex items-center justify-between pb-3 border-b border-[#212638]">
           <div className="flex items-center gap-2">
             <Bell className="w-4 h-4 text-[#ff2d75]" />

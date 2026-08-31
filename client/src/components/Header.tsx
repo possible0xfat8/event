@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { User, NotificationItem } from '../types';
-import { MapPin, Bell, Radio, Navigation, Compass, Sparkles } from 'lucide-react';
+import { MapPin, Bell, Radio, Navigation, Compass } from 'lucide-react';
 
 interface HeaderProps {
   currentUser: User;
@@ -41,7 +41,7 @@ export const Header: React.FC<HeaderProps> = ({
   const unreadCount = notifications.filter(n => !n.read).length;
 
   return (
-    <header className="sticky top-0 z-40 w-full glass-panel border-b border-[#212638] px-4 py-3">
+    <header className="sticky top-0 z-50 w-full glass-panel border-b border-[#212638] px-4 py-3">
       <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
         {/* Left: Brand + Live GPS Location Selector */}
         <div className="flex items-center gap-3">
@@ -60,7 +60,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
 
           {/* Location Selector / GPS Switcher */}
-          <div className="relative">
+          <div className="relative z-[999]">
             <button
               onClick={() => setShowCityMenu(!showCityMenu)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold transition ${
@@ -78,7 +78,7 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
 
             {showCityMenu && (
-              <div className="absolute left-0 mt-2 w-64 rounded-2xl bg-[#12141e] border border-[#2a3048] shadow-2xl p-2 z-50 animate-in fade-in zoom-in-95 duration-150">
+              <div className="absolute left-0 mt-2 w-64 rounded-2xl bg-[#12141e] border border-[#2a3048] shadow-2xl p-2 z-[9999] animate-in fade-in zoom-in-95 duration-150">
                 {/* Live GPS Button */}
                 <button
                   onClick={() => {
@@ -150,7 +150,7 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
 
           {/* User Persona Switcher */}
-          <div className="relative">
+          <div className="relative z-[999]">
             <button
               onClick={() => setShowUserMenu(!showUserMenu)}
               className="flex items-center gap-2 p-1.5 pr-3 rounded-full bg-[#181b29] hover:bg-[#22273b] border border-[#2a3048] transition"
@@ -167,7 +167,7 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
 
             {showUserMenu && (
-              <div className="absolute right-0 mt-2 w-64 rounded-2xl bg-[#12141e] border border-[#2a3048] shadow-2xl p-2 z-50 animate-in fade-in zoom-in-95 duration-150">
+              <div className="absolute right-0 mt-2 w-64 rounded-2xl bg-[#12141e] border border-[#2a3048] shadow-2xl p-2 z-[9999] animate-in fade-in zoom-in-95 duration-150">
                 <div className="px-3 py-2 border-b border-[#212638]">
                   <p className="text-xs font-semibold text-white">{currentUser.name}</p>
                   <p className="text-[10px] text-slate-400">{currentUser.email}</p>
